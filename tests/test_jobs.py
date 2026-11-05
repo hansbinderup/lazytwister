@@ -87,8 +87,10 @@ async def test_parallel_jobs_use_separate_outdirs(test_tree, tmp_path, fake_twis
     assert c.slot in (0, 1)  # slot reused, no third outdir
     assert b.live_status == {"drivers.beta": "failed"}
     assert b.results[0].status == "failed"
-    argv = json.loads((b.outdir / "argv.json").read_text())
-    assert "-s" in argv and "drivers.beta" in argv
+    # Job c reuses a finished job's slot dir, so check b's own command, not the file.
+    assert b.command[b.command.index("-s") + 1] == "drivers.beta"
+    argv = json.loads((c.outdir / "argv.json").read_text())
+    assert argv[argv.index("-s") + 1] == "lib.alpha.variant"
 
 
 async def test_cancel_running_job(test_tree, tmp_path, fake_twister, monkeypatch):
