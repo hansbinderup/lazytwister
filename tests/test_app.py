@@ -75,3 +75,53 @@ async def test_new_testcase_is_picked_up_live(test_tree, tmp_path, fake_twister)
         new.parent.mkdir(parents=True)
         new.write_text("tests:\n  subsys.gamma: {}\n")
         await wait_for(lambda: "s:subsys.gamma" in app.node_index, timeout=10)
+
+
+def test_pick_layout():
+    pick = LazyTwisterApp.pick_layout
+    assert pick(200, 50) == ("landscape", False)
+    assert pick(160, 90) == ("portrait", False)   # tall window
+    assert pick(100, 60) == ("portrait", False)   # narrow split
+    assert pick(80, 30) == ("portrait", True)     # small
+    assert pick(200, 20) == ("landscape", True)   # short
+    assert pick(80, 30, "landscape") == ("landscape", True)
+
+
+async def test_layout_adapts_to_resize(test_tree, tmp_path, fake_twister):
+    app = make_app(test_tree, tmp_path, fake_twister)
+    async with app.run_test(size=(200, 50)) as pilot:
+        await wait_for(lambda: "s:drivers.beta" in app.node_index)
+        screen = app.main_screen
+        assert not screen.has_class("-portrait") and not screen.has_class("-compact")
+        left, right = app.query_one("#left"), app.query_one("#right")
+        assert left.region.y == right.region.y  # side by side
+
+        await pilot.resize_terminal(100, 70)
+        await pilot.pause()
+        assert screen.has_class("-portrait") and not screen.has_class("-compact")
+        assert left.region.x == right.region.x and right.region.y > left.region.y  # stacked
+
+        await pilot.resize_terminal(80, 30)
+        await pilot.pause()
+        assert screen.has_class("-compact")
+        assert not app.query_one("#details-panel").display
+        await pilot.press("5")
+        assert type(app.screen).__name__ == "InfoScreen"
+        await pilot.press("escape")
+        assert app.screen is screen
+
+        await pilot.press("v")  # auto -> forced landscape
+        await pilot.pause()
+        assert app.layout_mode == "landscape" and not screen.has_class("-portrait")
+
+
+async def test_zoom_maximizes_focused_panel(test_tree, tmp_path, fake_twister):
+    app = make_app(test_tree, tmp_path, fake_twister)
+    async with app.run_test(size=(200, 50)) as pilot:
+        await wait_for(lambda: "s:drivers.beta" in app.node_index)
+        await pilot.press("z")
+        assert app.main_screen.maximized is app.query_one("#tests-panel")
+        await pilot.press("z")
+        assert app.main_screen.maximized is None
+        await pilot.press("4", "z")
+        assert app.main_screen.maximized is app.query_one("#log")

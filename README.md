@@ -35,6 +35,18 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
 - **Auto-run** (`w`): when a file changes, lazytwister reruns the scenarios it belongs to.
   For a change outside a test directory (any path passed with `-w`), it repeats the last run.
 
+## Adaptive layout
+
+The layout follows the terminal size and switches live as you resize or split panes:
+
+- **Landscape** (wide terminals): two columns, as above.
+- **Portrait** (fewer than 110 columns, or fewer columns than twice the number of rows):
+  the panels are stacked top to bottom, so long scenario names get the full width.
+- **Compact** (small terminals): Status and Details are hidden. The settings are summarised
+  in the Jobs panel's subtitle, and `2` / `5` open those panels as pop-ups.
+
+`v` overrides the automatic choice, and `z` maximises the focused panel.
+
 ## Install
 
 ```sh
@@ -87,6 +99,8 @@ Its Python dependencies must also be installed in west's environment.
 | `e` | open the yaml or test source in `$EDITOR` |
 | Jobs panel: `x` / `r` / `L` | cancel / rerun / clear finished jobs |
 | `ctrl+x` / `ctrl+r` | cancel all jobs / rediscover tests |
+| `z` | maximise / restore the focused panel |
+| `v` | layout: auto → landscape → portrait |
 | `?` / `q` | help / quit |
 
 ## Where things go

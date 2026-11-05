@@ -110,6 +110,16 @@ class JobList(OptionList):
     ]
 
 
+class Panel(Vertical):
+    """Bordered container that `z` can maximize as a whole."""
+
+    ALLOW_MAXIMIZE = True
+
+
+class ScrollPanel(VerticalScroll):
+    ALLOW_MAXIMIZE = True
+
+
 class FilterInput(Input):
     BINDINGS = [Binding("escape", "app.clear_filter", "Clear filter")]
 
@@ -163,7 +173,11 @@ HELP_TEXT = """\
   p          choose platforms            g   toggle integration mode (-G)
   + / -      more / fewer parallel jobs  w   toggle auto-run on file change
   ctrl+x     cancel all jobs             ctrl+r  rediscover tests
+  z          maximize / restore panel    v   layout: auto → landscape → portrait
   q          quit
+
+Layout adapts to the terminal: two columns when wide, stacked when narrow or
+tall, and compact (status/details as popups via 2/5) when small.
 
 [b]Jobs[/]   x cancel · r rerun · L clear finished
 
@@ -179,6 +193,23 @@ class HelpScreen(ModalScreen[None]):
         with VerticalScroll(id="help-dialog", classes="panel") as dialog:
             dialog.border_title = "Keybindings"
             yield Static(HELP_TEXT)
+
+
+class InfoScreen(ModalScreen[None]):
+    """Shows a panel that compact layout hides (status / details) as a popup."""
+
+    BINDINGS = [Binding("escape,q,2,5", "app.pop_screen", "Close")]
+
+    def __init__(self, title: str, content: Text):
+        super().__init__()
+        self.title_text = title
+        self.content = content
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="info-dialog", classes="panel") as dialog:
+            dialog.border_title = self.title_text
+            dialog.border_subtitle = "esc: close"
+            yield Static(self.content)
 
 
 # --------------------------------------------------------------------------
@@ -211,11 +242,26 @@ class LazyTwisterApp(App):
     #jobs { height: 9; }
     #log { height: 1fr; }
     #details-panel { height: 40%; padding: 0 1; }
-    #platform-dialog, #help-dialog {
-        width: 80; max-width: 95%; height: auto; max-height: 85%;
+    #platform-dialog, #help-dialog, #info-dialog {
+        width: 90; max-width: 95%; height: auto; max-height: 90%;
         padding: 1 2; background: $surface;
     }
-    PlatformScreen, HelpScreen { align: center middle; }
+    PlatformScreen, HelpScreen, InfoScreen { align: center middle; }
+
+    /* Portrait: stack the two columns. */
+    Screen.-portrait { layout: vertical; }
+    Screen.-portrait #left, Screen.-portrait #right { width: 100%; min-width: 0; }
+    Screen.-portrait #left { height: 45%; }
+    Screen.-portrait #right { height: 1fr; }
+    Screen.-portrait #status { max-height: 9; }
+    Screen.-portrait #jobs { height: 7; }
+    Screen.-portrait #details-panel { height: 35%; }
+
+    /* Compact: too small for everything — status/details become popups. */
+    Screen.-compact #status, Screen.-compact #details-panel { display: none; }
+    Screen.-compact #jobs { height: 5; }
+    Screen.-compact.-portrait #left { height: 55%; }
+    Screen.-compact #left { min-width: 30; }
     #platform-list { height: auto; max-height: 20; margin: 1 0; }
     """
 
@@ -233,6 +279,8 @@ class LazyTwisterApp(App):
         Binding("f", "toggle_failed_only", "Failed only", show=False),
         Binding("ctrl+x", "cancel_all", "Cancel all", show=False),
         Binding("ctrl+r", "rediscover", "Rediscover", show=False),
+        Binding("z", "toggle_maximize", "Zoom"),
+        Binding("v", "cycle_layout", "Layout", show=False),
         Binding("1", "focus_panel('tests')", show=False),
         Binding("2", "focus_panel('status')", show=False),
         Binding("3", "focus_panel('jobs')", show=False),
@@ -267,12 +315,15 @@ class LazyTwisterApp(App):
         self._tree_built = False
         self._dirty = False
         self._spin = 0
+        self.layout_mode = "auto"  # auto | landscape | portrait
+        self.orientation = "landscape"
+        self.compact = False
 
     # -- layout ------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         with Vertical(id="left"):
-            with Vertical(id="tests-panel", classes="panel") as tests_panel:
+            with Panel(id="tests-panel", classes="panel") as tests_panel:
                 tests_panel.border_title = "[1] Tests"
                 tree = TestTree("tests", id="tests")
                 tree.show_root = False
@@ -291,7 +342,7 @@ class LazyTwisterApp(App):
             log = RichLog(id="log", classes="panel", markup=False, highlight=False, wrap=False)
             log.border_title = "[4] Output"
             yield log
-            with VerticalScroll(id="details-panel", classes="panel") as details:
+            with ScrollPanel(id="details-panel", classes="panel") as details:
                 details.border_title = "[5] Details"
                 yield Static(id="details")
         yield Footer()
@@ -301,11 +352,66 @@ class LazyTwisterApp(App):
         return self.query_one("#tests", TestTree)
 
     async def on_mount(self) -> None:
+        self.main_screen = self.screen
+        self.apply_layout()
         self.tree.focus()
         self.update_status()
         self.set_interval(0.15, self._tick)
         await self.rediscover()
         self.watch_files()
+
+    # -- adaptive layout ------------------------------------------------------
+
+    # Terminal cells are ~2x taller than wide, so a "square" window is about
+    # twice as many columns as rows.
+    PORTRAIT_MAX_WIDTH = 110
+
+    @staticmethod
+    def pick_layout(width: int, height: int, mode: str = "auto") -> tuple[str, bool]:
+        """Return (orientation, compact) for a terminal size."""
+        if mode == "auto":
+            portrait = width < LazyTwisterApp.PORTRAIT_MAX_WIDTH or width < 2 * height
+            orientation = "portrait" if portrait else "landscape"
+        else:
+            orientation = mode
+        if orientation == "portrait":
+            compact = height < 40 or width < 50
+        else:
+            compact = height < 24 or width < 90
+        return orientation, compact
+
+    def apply_layout(self, size=None) -> None:
+        screen = getattr(self, "main_screen", None)
+        if screen is None:
+            return
+        width, height = size or self.size
+        self.orientation, self.compact = self.pick_layout(width, height, self.layout_mode)
+        screen.set_class(self.orientation == "portrait", "-portrait")
+        screen.set_class(self.compact, "-compact")
+        # Hidden panels can't keep focus.
+        if self.compact and self.focused is not None and self.focused.id in (
+            "status", "details-panel"
+        ):
+            self.tree.focus()
+        self.refresh_jobs()
+
+    def on_resize(self, event) -> None:
+        # Runs before App updates self.size, so use the event's size.
+        self.apply_layout(event.size)
+
+    def action_cycle_layout(self) -> None:
+        modes = ["auto", "landscape", "portrait"]
+        self.layout_mode = modes[(modes.index(self.layout_mode) + 1) % len(modes)]
+        self.apply_layout()
+        self.notify(f"layout: {self.layout_mode} ({self.orientation}"
+                    f"{', compact' if self.compact else ''})", timeout=2)
+
+    def action_toggle_maximize(self) -> None:
+        screen = self.main_screen
+        if screen.maximized is not None:
+            screen.minimize()
+        elif self.focused is not None:
+            screen.maximize(self.focused)
 
     # -- discovery & tree ----------------------------------------------------
 
@@ -480,6 +586,11 @@ class LazyTwisterApp(App):
     # -- panels ---------------------------------------------------------------
 
     def update_status(self) -> None:
+        self.query_one("#status", Static).update(self._status_text())
+        if getattr(self, "compact", False):
+            self.query_one(JobList).border_subtitle = self.short_status()
+
+    def _status_text(self) -> Text:
         cfg = self.config
         on = Text("on", style="green")
         off = Text("off", style="bright_black")
@@ -508,7 +619,7 @@ class LazyTwisterApp(App):
         if self.discovery.errors:
             row("yaml errors", Text(str(len(self.discovery.errors)), style="bold red"))
         text.rstrip()
-        self.query_one("#status", Static).update(text)
+        return text
 
     def _rel(self, path: Path) -> str:
         try:
@@ -541,10 +652,20 @@ class LazyTwisterApp(App):
                 if job.id == highlighted:
                     job_list.highlighted = index
                     break
-        job_list.border_subtitle = (
-            f"{len(self.jobs.running())}/{self.jobs.max_parallel} running"
-            if self.jobs.jobs else ""
-        )
+        job_list.border_subtitle = self.short_status()
+
+    def short_status(self) -> str:
+        """One-line settings summary; the only status shown in compact layout."""
+        parts = [f"{len(self.jobs.running())}/{self.jobs.max_parallel} running"]
+        if self.jobs.queued():
+            parts.append(f"{len(self.jobs.queued())} queued")
+        if getattr(self, "compact", False):
+            parts.append(", ".join(self.options.platforms) or "default platforms")
+            if self.options.integration:
+                parts.append("-G")
+            if self.auto_run:
+                parts.append("auto-run")
+        return " · ".join(parts)
 
     def show_job_log(self, job: Job | None) -> None:
         log = self.query_one("#log", RichLog)
@@ -863,7 +984,15 @@ class LazyTwisterApp(App):
         self.notify(f"{len(self.discovery.scenarios)} scenarios", timeout=2)
 
     def action_focus_panel(self, panel_id: str) -> None:
-        self.query_one(f"#{panel_id}").focus()
+        if self.compact and panel_id == "status":
+            self.push_screen(InfoScreen("Status", self._status_text()))
+        elif self.compact and panel_id == "details-panel":
+            node = self.tree.cursor_node
+            ref = node.data if node is not None else None
+            content = self._details_for(ref) if ref else Text("Select a test.")
+            self.push_screen(InfoScreen("Details", content))
+        else:
+            self.query_one(f"#{panel_id}").focus()
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
