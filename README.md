@@ -5,14 +5,14 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
 ```
 ┌[1] Tests ───────────────────────────────┐┌[3] Jobs ─────────────────────────────┐
 │ ▾ ✘ tests/  1/12 ✘1                     ││ ⠹ #3 lib/                 4/7  12s   │
-│   ▾ ✘ drivers/  0/3 ✘1                  ││ ✘ #2 drivers.hw_…shell    1/1   9s   │
+│   ▾ ✘ drivers/  0/3 ✘1                  ││ … #4 drivers.beta         queued 1   │
 │     ▸ ✘ drivers.gpio.2pin               ││ ✔ #1 libraries.encoding.json     8s  │
 │   ▾ ✔ lib/  1/7                         │├[4] Output ───────────────────────────┤
 │     ▾ ✔ libraries.encoding.json         ││ $ west twister -T … -s … -G -i -v …  │
 │         ✔ lib_json_test.json_encoding   ││ INFO - 1/1 native_sim/native/64 …    │
 ├[2] Status ──────────────────────────────┤├[5] Details ──────────────────────────┤
 │ platforms  twister default              ││ scenario  libraries.encoding.json    │
-│ parallel   2 jobs (1 running, 0 queued) ││ last results / failing cases / log   │
+│ queue      running #3, 1 queued         ││ last results / failing cases / log   │
 └─────────────────────────────────────────┘└──────────────────────────────────────┘
 ```
 
@@ -24,14 +24,18 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
   (via `watchfiles`). Keep it open next to your editor.
 - **Run anything**: a folder (`twister -T`), one scenario (`-s`), or a single ztest case
   (`-- -test=suite::test`, native targets).
-- **Parallel**:
-  - `space` marks several nodes. `r` runs them in **one** twister invocation, and twister
-    parallelises the builds itself.
-  - `R` runs each marked node as a **separate job**. Jobs are queued and up to
-    `--parallel` run at once (`+`/`-` to change it). Each job gets its own output
-    directory, and twister's `-j` is split between jobs.
+- **Job queue**: only one twister job runs at a time, so runs never compete for CPU.
+  Twister still parallelises the builds within a job.
+  - `enter` adds the node under the cursor to the queue. Mark several nodes with `space`,
+    then `r` queues them all as **one** job (a single twister invocation).
+  - In the Jobs panel, the running job is listed first, then the queue in execution order,
+    then finished jobs. `x` cancels the selected job, queued or running, and `J`/`K`
+    move a queued job later or earlier. `ctrl+x` clears the whole queue and stops the
+    running job.
+  - The next job only starts once the previous twister process has fully exited,
+    including after a cancel.
 - **Results** are kept across runs (per scenario and platform), with failing cases and
-  log tails shown in the details panel. `F` reruns everything that failed.
+  log tails shown in the details panel. `F` queues everything that failed.
 - **Auto-run** (`w`): when a file changes, lazytwister reruns the scenarios it belongs to.
   For a change outside a test directory (any path passed with `-w`), it repeats the last run.
 
@@ -59,7 +63,7 @@ SDK are on `PATH`:
 ```sh
 cd ~/zephyrproject && nix develop
 ~/repos/lazytwister/.venv/bin/lazytwister                # defaults to ./tests
-lazytwister -T tests/lib -p native_sim/native/64 -P 3 -w lib -- --coverage
+lazytwister -T tests/lib -p native_sim/native/64 -j 8 -w lib -- --coverage
 ```
 
 Arguments after `--` are passed to every twister invocation.
@@ -88,17 +92,17 @@ Its Python dependencies must also be installed in west's environment.
 | Key | Action |
 | --- | --- |
 | `1`–`5`, `tab` | focus a panel |
-| `enter` | run the node under the cursor |
+| `enter` | queue the node under the cursor |
 | `space` / `c` | mark or unmark a node / clear all marks |
-| `r` / `R` | run marked nodes as one job / as parallel jobs |
-| `a` / `F` | run all / rerun failed |
+| `r` | queue the marked nodes as one job |
+| `a` / `F` | queue all / queue failed |
 | `p` / `g` | choose platforms / toggle integration mode `-G` |
-| `+` / `-` | more / fewer parallel jobs |
 | `w` | toggle auto-run on file change |
 | `/` / `f` | filter / show failed only |
 | `e` | open the yaml or test source in `$EDITOR` |
-| Jobs panel: `x` / `r` / `L` | cancel / rerun / clear finished jobs |
-| `ctrl+x` / `ctrl+r` | cancel all jobs / rediscover tests |
+| Jobs panel: `x` / `J` `K` | cancel the selected job / move a queued job later or earlier |
+| Jobs panel: `r` / `L` | requeue the job / clear finished jobs |
+| `ctrl+x` / `ctrl+r` | clear the queue and stop the running job / rediscover tests |
 | `z` | maximise / restore the focused panel |
 | `v` | layout: auto → landscape → portrait |
 | `?` / `q` | help / quit |
@@ -106,8 +110,8 @@ Its Python dependencies must also be installed in west's environment.
 ## Where things go
 
 Results and twister output are stored in `~/.cache/lazytwister/<workspace>/` (override
-with `--state-dir`). Nothing is written into your repo. There is one `run-N` directory
-per parallel slot, and twister cleans it before reusing it.
+with `--state-dir`). Nothing is written into your repo. All jobs share a single `run`
+output directory, which twister cleans at the start of each job.
 
 ## Development
 

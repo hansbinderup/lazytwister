@@ -1,4 +1,4 @@
-"""Twister run targets, command construction and a parallel job queue."""
+"""Twister run targets, command construction and the job queue."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ class RunOptions:
     inline_logs: bool = True
     verbose: bool = True  # -v: twister prints one line per finished scenario (live status)
     extra_args: list[str] = field(default_factory=list)
-    jobs: int | None = None  # twister -j; None = split CPUs between parallel jobs
+    jobs: int | None = None  # twister -j; None = twister's default
 
 
 @dataclass
@@ -163,7 +163,6 @@ class Job:
     options: RunOptions
     state: str = "queued"  # queued | running | passed | failed | cancelled | error
     command: list[str] = field(default_factory=list)
-    slot: int | None = None
     outdir: Path | None = None
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -188,11 +187,11 @@ class Job:
 
 
 class JobManager:
-    """Runs twister jobs with bounded parallelism.
+    """Runs twister jobs one at a time from a FIFO queue.
 
-    Each concurrently running job gets its own output-directory "slot", so
-    parallel twister processes never share (or clean) each other's outdir.
-    Slots are reused, so no stale output accumulates.
+    Only one twister process runs at once (twister already parallelises its
+    builds internally), so a run never competes with another for CPU. Every
+    job reuses the same output directory, which twister cleans before each run.
     """
 
     def __init__(
@@ -200,7 +199,6 @@ class JobManager:
         twister_cmd: list[str],
         state_dir: Path,
         cwd: Path,
-        max_parallel: int = 2,
         on_change: Callable[[Job], None] | None = None,
         on_line: Callable[[Job, str], None] | None = None,
         on_finished: Callable[[Job], None] | None = None,
@@ -208,67 +206,66 @@ class JobManager:
         self.twister_cmd = twister_cmd
         self.state_dir = state_dir
         self.cwd = cwd
-        self.max_parallel = max(1, max_parallel)
         self.on_change = on_change or (lambda job: None)
         self.on_line = on_line or (lambda job, line: None)
         self.on_finished = on_finished or (lambda job: None)
-        self.jobs: list[Job] = []
+        self.jobs: list[Job] = []  # every job, in submission order (history)
+        self.queue: list[Job] = []  # waiting jobs, in execution order
+        self.current: Job | None = None  # set until its process has fully exited
         self._next_id = 1
-        self._tasks: set[asyncio.Task] = set()
+        self._task: asyncio.Task | None = None
 
     # -- queue -------------------------------------------------------------
 
     def submit(self, target: RunTarget, options: RunOptions) -> Job | None:
-        """Queue a run. Returns None if an identical run is already queued."""
+        """Append a run to the queue. Returns None if an identical run is already queued."""
         signature = target.signature()
-        for job in self.jobs:
-            if job.state == "queued" and job.target.signature() == signature:
-                return None
+        if any(job.target.signature() == signature for job in self.queue):
+            return None
         job = Job(self._next_id, target, options)
         self._next_id += 1
         self.jobs.append(job)
+        self.queue.append(job)
         self.on_change(job)
-        self._schedule()
+        self._start_next()
         return job
 
-    def set_max_parallel(self, value: int) -> None:
-        self.max_parallel = max(1, min(value, os.cpu_count() or 1))
-        self._schedule()
+    def queued(self) -> list[Job]:
+        return list(self.queue)
 
     def running(self) -> list[Job]:
-        return [j for j in self.jobs if j.state == "running"]
+        return [self.current] if self.current is not None else []
 
-    def queued(self) -> list[Job]:
-        return [j for j in self.jobs if j.state == "queued"]
+    def position(self, job: Job) -> int | None:
+        """1-based place in the queue, or None if not queued."""
+        return self.queue.index(job) + 1 if job in self.queue else None
 
-    def _schedule(self) -> None:
-        busy = {j.slot for j in self.running()}
-        for job in self.queued():
-            if len(busy) >= self.max_parallel:
-                break
-            slot = next(i for i in range(len(busy) + 1) if i not in busy)
-            busy.add(slot)
-            job.slot = slot
-            job.state = "running"
-            task = asyncio.get_running_loop().create_task(self._run(job))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+    def move(self, job: Job, delta: int) -> bool:
+        """Move a queued job earlier (negative) or later (positive) in the queue."""
+        if job not in self.queue:
+            return False
+        index = self.queue.index(job)
+        new_index = max(0, min(len(self.queue) - 1, index + delta))
+        if new_index == index:
+            return False
+        self.queue.insert(new_index, self.queue.pop(index))
+        self.on_change(job)
+        return True
 
-    def _jobs_for(self, options: RunOptions) -> int | None:
-        if options.jobs:
-            return options.jobs
-        if any(a in ("-j", "--jobs") or a.startswith("--jobs=") for a in options.extra_args):
-            return None
-        cpus = os.cpu_count() or 1
-        return max(1, cpus // self.max_parallel)
+    def _start_next(self) -> None:
+        if self.current is not None or not self.queue:
+            return
+        job = self.queue.pop(0)
+        job.state = "running"
+        self.current = job
+        self._task = asyncio.get_running_loop().create_task(self._run(job))
 
     # -- execution ---------------------------------------------------------
 
     async def _run(self, job: Job) -> None:
-        assert job.slot is not None
-        job.outdir = self.state_dir / f"run-{job.slot}"
+        job.outdir = self.state_dir / "run"
         job.command = build_command(
-            self.twister_cmd, job.target, job.options, job.outdir, self._jobs_for(job.options)
+            self.twister_cmd, job.target, job.options, job.outdir, job.options.jobs
         )
         job.started_at = time.time()
         if job.state == "cancelled":  # cancelled before the task got to run
@@ -358,29 +355,38 @@ class JobManager:
         job.finished_at = time.time()
         job.process = None
         self._emit(job, f"── job #{job.id} {state} in {job.elapsed:.1f}s ──")
+        if job is self.current:
+            self.current = None
         self.on_finished(job)
         self.on_change(job)
-        self._schedule()
+        self._start_next()
 
     # -- control -----------------------------------------------------------
 
     def cancel(self, job: Job) -> None:
-        if job.state == "queued":
+        """Remove a queued job, or stop the running one (the queue then continues)."""
+        if job in self.queue:
+            self.queue.remove(job)
             job.state = "cancelled"
             job.finished_at = time.time()
             self.on_finished(job)
             self.on_change(job)
-        elif job.state == "running":
+        elif job is self.current and job.state == "running":
             job.state = "cancelled"
             if job.process is not None:
                 self._emit(job, "cancelling…")
                 self._signal(job, signal.SIGINT)
                 asyncio.get_running_loop().call_later(5, self._signal, job, signal.SIGKILL)
 
+    def clear_queue(self) -> None:
+        """Cancel every queued job; the running one keeps going."""
+        for job in list(self.queue):
+            self.cancel(job)
+
     def cancel_all(self) -> None:
-        for job in list(self.jobs):
-            if job.active:
-                self.cancel(job)
+        self.clear_queue()
+        if self.current is not None:
+            self.cancel(self.current)
 
     @staticmethod
     def _signal(job: Job, sig: int) -> None:
@@ -395,6 +401,5 @@ class JobManager:
         self.jobs = [j for j in self.jobs if j.active]
 
     def shutdown(self) -> None:
-        for job in self.jobs:
-            if job.state == "running":
-                self._signal(job, signal.SIGKILL)
+        if self.current is not None:
+            self._signal(self.current, signal.SIGKILL)

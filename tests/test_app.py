@@ -16,7 +16,6 @@ def make_app(test_tree: Path, tmp_path: Path, fake_twister) -> LazyTwisterApp:
         twister_cmd=fake_twister,
         state_dir=tmp_path / "state",
         options=RunOptions(),
-        max_parallel=2,
     ))
 
 
@@ -39,7 +38,9 @@ async def test_tree_shows_scenarios_and_runs_one(test_tree, tmp_path, fake_twist
         assert app.jobs.jobs[0].state == "passed"
 
 
-async def test_mark_and_run_in_parallel(test_tree, tmp_path, fake_twister):
+async def test_marked_nodes_queue_as_one_job_and_enter_queues_more(
+        test_tree, tmp_path, fake_twister, monkeypatch):
+    monkeypatch.setenv("FAKE_DELAY", "1.0")
     app = make_app(test_tree, tmp_path, fake_twister)
     async with app.run_test(size=(160, 50)) as pilot:
         await wait_for(lambda: "s:drivers.beta" in app.node_index)
@@ -47,11 +48,26 @@ async def test_mark_and_run_in_parallel(test_tree, tmp_path, fake_twister):
         await pilot.press("space")
         app.tree.move_cursor(app.node_index["s:lib.alpha.default"])
         await pilot.press("space")
-        assert len(app.marks) == 2
-        await pilot.press("R")
-        assert len(app.jobs.jobs) == 2
-        await wait_for(lambda: all(not j.active for j in app.jobs.jobs))
-        assert not app.marks
+        await pilot.press("r")
+        assert len(app.jobs.jobs) == 1 and not app.marks
+        assert app.jobs.jobs[0].target.scenarios == ["drivers.beta", "lib.alpha.default"]
+
+        app.tree.move_cursor(app.node_index["s:lib.alpha.variant"])
+        await pilot.press("enter")
+        app.tree.move_cursor(app.node_index["s:drivers.beta"])
+        await pilot.press("enter")
+        assert len(app.jobs.queued()) == 2
+
+        # Jobs panel: running first, then queue order. Cancel the last queued job.
+        await pilot.press("3")
+        order = app.job_order()
+        assert order[0] is app.jobs.current
+        app.query_one("#jobs").highlighted = 2
+        await pilot.press("x")
+        assert order[2].state == "cancelled" and len(app.jobs.queued()) == 1
+
+        await wait_for(lambda: all(not j.active for j in app.jobs.jobs), timeout=15)
+        assert [j.state for j in app.jobs.jobs] == ["passed", "passed", "cancelled"]
 
 
 async def test_filter_narrows_tree(test_tree, tmp_path, fake_twister):

@@ -46,10 +46,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                         help="don't pass -G (integration mode) to twister")
     parser.add_argument("-q", "--quiet", action="store_true",
                         help="don't pass -v to twister (disables live per-scenario status)")
-    parser.add_argument("-P", "--parallel", type=int, default=2,
-                        help="max concurrently running twister jobs (default: 2)")
     parser.add_argument("-j", "--jobs", type=int, default=None,
-                        help="twister -j per job (default: CPUs / --parallel)")
+                        help="twister -j (default: twister's own default)")
     parser.add_argument("-w", "--watch", action="append", type=Path, default=[],
                         help="extra path to watch for changes (repeatable), e.g. lib/")
     parser.add_argument("--auto-run", action="store_true",
@@ -70,8 +68,6 @@ def config_from_args(args: argparse.Namespace, extra: list[str]):
     missing = [r for r in roots if not r.is_dir()]
     if missing:
         raise SystemExit(f"lazytwister: test root does not exist: {missing[0]}")
-    if args.parallel < 1:
-        raise SystemExit("lazytwister: --parallel must be >= 1")
     if args.jobs is not None and args.jobs < 1:
         raise SystemExit("lazytwister: --jobs must be >= 1")
     twister = shlex.split(args.twister) if args.twister else default_twister_cmd(
@@ -90,7 +86,6 @@ def config_from_args(args: argparse.Namespace, extra: list[str]):
             extra_args=extra,
             jobs=args.jobs,
         ),
-        max_parallel=args.parallel,
         watch_paths=[w.resolve() for w in args.watch],
         auto_run=args.auto_run,
     )

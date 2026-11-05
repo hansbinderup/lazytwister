@@ -56,7 +56,6 @@ class AppConfig:
     twister_cmd: list[str]
     state_dir: Path
     options: RunOptions = field(default_factory=RunOptions)
-    max_parallel: int = 2
     watch_paths: list[Path] = field(default_factory=list)
     auto_run: bool = False
 
@@ -68,10 +67,9 @@ class AppConfig:
 
 class TestTree(Tree[NodeRef]):
     BINDINGS = [
-        Binding("enter", "app.run_cursor", "Run"),
+        Binding("enter", "app.run_cursor", "Queue"),
         Binding("space", "app.toggle_mark", "Mark"),
-        Binding("r", "app.run_marked", "Run marked"),
-        Binding("R", "app.run_marked_parallel", "Run marked ∥"),
+        Binding("r", "app.run_marked", "Queue marked"),
         Binding("c", "app.clear_marks", "Unmark", show=False),
         Binding("e", "app.edit", "Edit"),
         Binding("j", "cursor_down", show=False),
@@ -103,6 +101,8 @@ class TestTree(Tree[NodeRef]):
 class JobList(OptionList):
     BINDINGS = [
         Binding("x", "app.cancel_job", "Cancel"),
+        Binding("K,shift+up", "app.move_job(-1)", "Move up"),
+        Binding("J,shift+down", "app.move_job(1)", "Move down"),
         Binding("r", "app.rerun_job", "Rerun"),
         Binding("L", "app.clear_jobs", "Clear done"),
         Binding("j", "cursor_down", show=False),
@@ -159,27 +159,28 @@ HELP_TEXT = """\
 [b]Panels[/]   1 tests · 2 status · 3 jobs · 4 output · 5 details · tab cycles
 
 [b]Tests[/]
-  enter      run node under cursor (folder → whole folder, scenario, single ztest case)
+  enter      queue node under cursor (folder → whole folder, scenario, single ztest case)
   space      mark / unmark node (multi-select)
-  r          run marked nodes in ONE twister invocation (twister parallelises internally)
-  R          run each marked node as its OWN job (parallel job queue)
+  r          queue marked nodes as ONE job (one twister invocation)
   c          clear marks
   e          open testcase.yaml / test source in $EDITOR
   h/l j/k    navigate, collapse / expand
   /          filter        f   only failed
 
 [b]Global[/]
-  a          run all test roots          F   rerun failed scenarios
+  a          queue all test roots        F   queue failed scenarios
   p          choose platforms            g   toggle integration mode (-G)
-  + / -      more / fewer parallel jobs  w   toggle auto-run on file change
-  ctrl+x     cancel all jobs             ctrl+r  rediscover tests
+  w          toggle auto-run on change   ctrl+r  rediscover tests
+  ctrl+x     clear queue + stop running job
   z          maximize / restore panel    v   layout: auto → landscape → portrait
   q          quit
 
 Layout adapts to the terminal: two columns when wide, stacked when narrow or
 tall, and compact (status/details as popups via 2/5) when small.
 
-[b]Jobs[/]   x cancel · r rerun · L clear finished
+[b]Jobs[/]   one job runs at a time; the rest wait in the queue
+  x cancel (queued or running) · J/K move queued job later/earlier
+  r requeue · L clear finished
 
 Single ztest cases are filtered with the native_sim `-test=` option,
 so they only narrow the run on native (posix) platforms.
@@ -273,11 +274,9 @@ class LazyTwisterApp(App):
         Binding("p", "platforms", "Platform"),
         Binding("g", "toggle_integration", "-G", show=False),
         Binding("w", "toggle_autorun", "Auto-run"),
-        Binding("plus,equals_sign", "parallel(1)", "+jobs", show=False),
-        Binding("minus", "parallel(-1)", "-jobs", show=False),
         Binding("slash", "filter", "Filter"),
         Binding("f", "toggle_failed_only", "Failed only", show=False),
-        Binding("ctrl+x", "cancel_all", "Cancel all", show=False),
+        Binding("ctrl+x", "cancel_all", "Clear queue", show=False),
         Binding("ctrl+r", "rediscover", "Rediscover", show=False),
         Binding("z", "toggle_maximize", "Zoom"),
         Binding("v", "cycle_layout", "Layout", show=False),
@@ -299,7 +298,6 @@ class LazyTwisterApp(App):
             twister_cmd=config.twister_cmd,
             state_dir=config.state_dir,
             cwd=config.cwd,
-            max_parallel=config.max_parallel,
             on_change=self._on_job_change,
             on_line=self._on_job_line,
             on_finished=self._on_job_finished,
@@ -315,6 +313,7 @@ class LazyTwisterApp(App):
         self._tree_built = False
         self._dirty = False
         self._spin = 0
+        self._followed_job: int | None = None
         self.layout_mode = "auto"  # auto | landscape | portrait
         self.orientation = "landscape"
         self.compact = False
@@ -608,8 +607,9 @@ class LazyTwisterApp(App):
         row("platforms", ", ".join(self.options.platforms) or "twister default")
         row("integration", on if self.options.integration else off)
         row("auto-run", on if self.auto_run else off)
-        row("parallel", f"{self.jobs.max_parallel} jobs  ({len(self.jobs.running())} running,"
-            f" {len(self.jobs.queued())} queued)")
+        current = self.jobs.current
+        row("queue", f"{'running #' + str(current.id) if current else 'idle'}"
+            f", {len(self.jobs.queued())} queued")
         cases = sum(len(s.cases) for s in self.discovery.scenarios)
         summary = Text(f"{len(names)} scenarios, {cases} cases  ")
         summary.append(f"✔{statuses.count('passed')} ", style="green")
@@ -627,10 +627,16 @@ class LazyTwisterApp(App):
         except ValueError:
             return str(path)
 
+    def job_order(self) -> list[Job]:
+        """Display order: running job, queue in execution order, then history."""
+        done = [j for j in reversed(self.jobs.jobs) if not j.active]
+        return [*self.jobs.running(), *self.jobs.queued(), *done]
+
     def refresh_jobs(self) -> None:
         job_list = self.query_one(JobList)
         options = []
-        for job in reversed(self.jobs.jobs):
+        order = self.job_order()
+        for job in order:
             if job.state == "running":
                 icon, style = SPINNER[self._spin % len(SPINNER)], "yellow"
             else:
@@ -639,6 +645,9 @@ class LazyTwisterApp(App):
             prompt.append(f"{icon} ", style=style)
             prompt.append(f"#{job.id} ", style="bright_black")
             prompt.append(job.target.title)
+            position = self.jobs.position(job)
+            if position is not None:
+                prompt.append(f"  queued {position}", style="yellow")
             if job.total:
                 prompt.append(f"  {job.done}/{job.total}", style="cyan")
             if job.started_at:
@@ -648,7 +657,7 @@ class LazyTwisterApp(App):
         job_list.clear_options()
         job_list.add_options(options)
         if highlighted is not None:
-            for index, job in enumerate(reversed(self.jobs.jobs)):
+            for index, job in enumerate(order):
                 if job.id == highlighted:
                     job_list.highlighted = index
                     break
@@ -656,7 +665,7 @@ class LazyTwisterApp(App):
 
     def short_status(self) -> str:
         """One-line settings summary; the only status shown in compact layout."""
-        parts = [f"{len(self.jobs.running())}/{self.jobs.max_parallel} running"]
+        parts = ["running" if self.jobs.current else "idle"]
         if self.jobs.queued():
             parts.append(f"{len(self.jobs.queued())} queued")
         if getattr(self, "compact", False):
@@ -772,6 +781,10 @@ class LazyTwisterApp(App):
 
     def _on_job_change(self, job: Job) -> None:
         self._dirty = True
+        # Follow the queue: show each job's output as soon as it starts.
+        if job is self.jobs.current and job.id != self._followed_job:
+            self._followed_job = job.id
+            self.show_job_log(job)
 
     def _on_job_line(self, job: Job, line: str) -> None:
         if job.id == self.viewed_job:
@@ -827,7 +840,9 @@ class LazyTwisterApp(App):
             self.notify("already queued", severity="warning", timeout=2)
             return
         self.last_target = target
-        self.show_job_log(job)
+        position = self.jobs.position(job)
+        if position is not None:
+            self.notify(f"queued #{job.id} ({position} waiting)", timeout=2)
         self._dirty = True
 
     def _cursor_ref(self) -> NodeRef | None:
@@ -872,15 +887,6 @@ class LazyTwisterApp(App):
             self.submit(refs)
             self.action_clear_marks()
 
-    def action_run_marked_parallel(self) -> None:
-        refs = self._marked_or_cursor()
-        for ref in refs:
-            self.submit([ref])
-        if refs:
-            self.notify(f"queued {len(refs)} jobs, {self.jobs.max_parallel} in parallel",
-                        timeout=3)
-            self.action_clear_marks()
-
     def action_run_all(self) -> None:
         self.submit([NodeRef("folder", root) for root in self.discovery.roots])
 
@@ -911,6 +917,12 @@ class LazyTwisterApp(App):
         job = self._selected_job()
         if job is not None and job.active:
             self.jobs.cancel(job)
+
+    def action_move_job(self, delta: int) -> None:
+        job = self._selected_job()
+        if job is not None and self.jobs.move(job, delta):
+            self.viewed_job = job.id
+            self.refresh_jobs()
 
     def action_rerun_job(self) -> None:
         job = self._selected_job()
@@ -945,10 +957,6 @@ class LazyTwisterApp(App):
         self.auto_run = not self.auto_run
         self.notify(f"auto-run on file change {'on' if self.auto_run else 'off'}", timeout=2)
         self.update_status()
-
-    def action_parallel(self, delta: int) -> None:
-        self.jobs.set_max_parallel(self.jobs.max_parallel + delta)
-        self._dirty = True
 
     def action_filter(self) -> None:
         box = self.query_one("#filter", FilterInput)

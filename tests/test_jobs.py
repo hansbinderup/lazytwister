@@ -62,35 +62,81 @@ def test_build_command(test_tree: Path, tmp_path: Path):
     ]
 
 
-async def test_parallel_jobs_use_separate_outdirs(test_tree, tmp_path, fake_twister, monkeypatch):
-    monkeypatch.setenv("FAKE_DELAY", "0.3")
+async def wait_until(predicate, timeout=10.0):
+    for _ in range(int(timeout / 0.05)):
+        if predicate():
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError("condition not met")
+
+
+async def test_queue_runs_one_job_at_a_time_in_order(test_tree, tmp_path, fake_twister,
+                                                     monkeypatch):
+    monkeypatch.setenv("FAKE_DELAY", "0.2")
     monkeypatch.setenv("FAKE_FAIL", "drivers.beta")
     found = discover([test_tree])
-    finished = []
-    manager = JobManager(fake_twister, tmp_path / "state", tmp_path, max_parallel=2,
-                         on_finished=finished.append)
+    finished, max_running = [], []
+    manager = JobManager(fake_twister, tmp_path / "state", tmp_path,
+                         on_finished=finished.append,
+                         on_change=lambda job: max_running.append(len(manager.running())))
     options = RunOptions()
     a = manager.submit(make_target(refs(found, "lib.alpha.default"), found), options)
     b = manager.submit(make_target(refs(found, "drivers.beta"), found), options)
     c = manager.submit(make_target(refs(found, "lib.alpha.variant"), found), options)
+    # Identical run already waiting -> not queued twice.
     assert manager.submit(make_target(refs(found, "lib.alpha.variant"), found), options) is None
 
-    await asyncio.sleep(0.1)
-    assert [j.state for j in (a, b, c)] == ["running", "running", "queued"]
-    assert a.outdir != b.outdir
+    assert manager.current is a
+    assert [j.state for j in (a, b, c)] == ["running", "queued", "queued"]
+    assert manager.position(b) == 1 and manager.position(c) == 2
 
-    for _ in range(100):
-        if len(finished) == 3:
-            break
-        await asyncio.sleep(0.05)
+    await wait_until(lambda: len(finished) == 3)
+    assert finished == [a, b, c]
     assert [j.state for j in (a, b, c)] == ["passed", "failed", "passed"]
-    assert c.slot in (0, 1)  # slot reused, no third outdir
+    assert max(max_running) == 1
+    assert a.outdir == b.outdir == c.outdir  # one reused output dir
     assert b.live_status == {"drivers.beta": "failed"}
     assert b.results[0].status == "failed"
-    # Job c reuses a finished job's slot dir, so check b's own command, not the file.
     assert b.command[b.command.index("-s") + 1] == "drivers.beta"
-    argv = json.loads((c.outdir / "argv.json").read_text())
-    assert argv[argv.index("-s") + 1] == "lib.alpha.variant"
+    assert "-j" not in a.command  # twister's own default unless -j is given
+
+
+async def test_cancel_and_reorder_queued_jobs(test_tree, tmp_path, fake_twister, monkeypatch):
+    monkeypatch.setenv("FAKE_DELAY", "0.3")
+    found = discover([test_tree])
+    finished = []
+    manager = JobManager(fake_twister, tmp_path / "state", tmp_path, on_finished=finished.append)
+    options = RunOptions()
+    a = manager.submit(make_target(refs(found, "lib.alpha.default"), found), options)
+    b = manager.submit(make_target(refs(found, "drivers.beta"), found), options)
+    c = manager.submit(make_target(refs(found, "lib.alpha.variant"), found), options)
+    d = manager.submit(make_target([NodeRef("folder", test_tree)], found), options)
+
+    manager.cancel(b)
+    assert b.state == "cancelled" and manager.queued() == [c, d]
+    assert manager.move(d, -1) and manager.queued() == [d, c]
+    assert not manager.move(d, -1)  # already first
+    assert not manager.move(a, 1)  # running jobs can't move
+
+    await wait_until(lambda: len(finished) == 4)
+    assert finished == [b, a, d, c]
+
+
+async def test_next_job_waits_for_cancelled_process_to_exit(test_tree, tmp_path, fake_twister,
+                                                            monkeypatch):
+    monkeypatch.setenv("FAKE_DELAY", "10")
+    found = discover([test_tree])
+    finished = []
+    manager = JobManager(fake_twister, tmp_path / "state", tmp_path, on_finished=finished.append)
+    a = manager.submit(make_target(refs(found, "drivers.beta"), found), RunOptions())
+    b = manager.submit(make_target(refs(found, "lib.alpha.default"), found), RunOptions())
+    await asyncio.sleep(0.3)
+    manager.cancel(a)
+    assert a.state == "cancelled" and manager.current is a and b.state == "queued"
+    await wait_until(lambda: a in finished)
+    assert manager.current is b and b.state == "running"
+    manager.cancel_all()
+    await wait_until(lambda: b in finished)
 
 
 async def test_cancel_running_job(test_tree, tmp_path, fake_twister, monkeypatch):
