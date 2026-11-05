@@ -17,6 +17,7 @@ parser.add_argument("-i", action="store_true")
 parser.add_argument("-v", action="count")
 parser.add_argument("-j", type=int)
 parser.add_argument("-O", required=True)
+parser.add_argument("--clobber-output", action="store_true")
 parser.add_argument("rest", nargs=argparse.REMAINDER)
 args = parser.parse_args()
 

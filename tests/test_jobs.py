@@ -57,7 +57,8 @@ def test_build_command(test_tree: Path, tmp_path: Path):
                         RunOptions(platforms=["native_sim"], extra_args=["-v"]), tmp_path, 4)
     assert cmd == [
         "west", "twister", "-T", str(alpha.directory), "-s", "lib.alpha.default",
-        "-p", "native_sim", "-G", "-i", "-v", "-j", "4", "-O", str(tmp_path), "-v",
+        "-p", "native_sim", "-G", "-i", "-v", "-j", "4", "-O", str(tmp_path), "--clobber-output",
+        "-v",
         "--", "-test=alpha_suite::test_adds",
     ]
 
@@ -190,3 +191,12 @@ def test_job_title_and_display_command(test_tree, tmp_path):
     cmd = ["west", "twister", "-T", str(test_tree / "lib"), "-O", str(tmp_path / "out"),
            "--", "-test=a::b c"]
     assert display_command(cmd, test_tree.parent) == "west twister -T tests/lib -- '-test=a::b c'"
+
+
+def test_no_clean_disables_clobber(tmp_path):
+    from lazytwister.jobs import RunTarget
+
+    target = RunTarget("t", [tmp_path], [], [], set())
+    assert "--clobber-output" in build_command(["tw"], target, RunOptions(), tmp_path, None)
+    cmd = build_command(["tw"], target, RunOptions(extra_args=["-n"]), tmp_path, None)
+    assert "--clobber-output" not in cmd

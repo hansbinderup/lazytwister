@@ -179,6 +179,10 @@ def build_command(
     if jobs:
         cmd += ["-j", str(jobs)]
     cmd += ["-O", str(outdir)]
+    # Without this twister renames the previous outdir to run.1, run.2, ... so the
+    # cache grows with every run (and twister gives up after 99).
+    if not any(a in ("-n", "--no-clean") for a in options.extra_args):
+        cmd.append("--clobber-output")
     cmd += options.extra_args
     if target.test_filters:
         cmd += ["--", "-test=" + ",".join(target.test_filters)]

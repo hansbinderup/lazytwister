@@ -221,3 +221,31 @@ async def test_edit_jumps_to_failing_assert(test_tree, tmp_path, fake_twister, m
         assert "failed at" in str(app.query_one("#details").render())
         await pilot.press("e")
         assert opened == [["my-editor", "+1", str(source)]]
+
+
+async def test_clear_cache_from_the_app(test_tree, tmp_path, fake_twister):
+    app = make_app(test_tree, tmp_path, fake_twister)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await wait_for(lambda: "s:drivers.beta" in app.node_index)
+        app.tree.move_cursor(app.node_index["s:drivers.beta"])
+        await pilot.press("enter")
+        await wait_for(lambda: app.store.scenario_status("drivers.beta") == "passed")
+        state = tmp_path / "state"
+        assert (state / "run").is_dir() and (state / "results.json").is_file()
+
+        await pilot.press("C")
+        await wait_for(lambda: type(app.screen).__name__ == "CacheScreen")
+        await pilot.press("escape")
+        assert (state / "run").is_dir()
+
+        await pilot.press("C")
+        await wait_for(lambda: type(app.screen).__name__ == "CacheScreen")
+        await pilot.press("b")
+        await wait_for(lambda: not (state / "run").exists())
+        assert app.store.scenario_status("drivers.beta") == "passed"  # results kept
+
+        await pilot.press("C")
+        await wait_for(lambda: type(app.screen).__name__ == "CacheScreen")
+        await pilot.press("a")
+        await wait_for(lambda: not (state / "results.json").exists())
+        assert app.store.scenario_status("drivers.beta") is None

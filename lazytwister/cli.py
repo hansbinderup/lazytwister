@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import argparse
-import os
-import re
 import shlex
 import shutil
 from pathlib import Path
 
+from . import cache
 from .config import CONFIG_NAME, ConfigError, FileConfig, find_config, load_config
 from .discovery import default_roots, find_workspace
 from .jobs import RunOptions
 
 
 def default_state_dir(anchor: Path) -> Path:
-    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", str(anchor.resolve())).strip("_")
-    return cache / "lazytwister" / slug
+    return cache.state_dir_for(anchor)
 
 
 def default_twister_cmd(zephyr_base: Path | None) -> list[str]:
@@ -60,6 +57,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--state-dir", type=Path, default=None,
                         help="where results and twister output go "
                              "(default: ~/.cache/lazytwister/<workspace>)")
+    parser.add_argument("--cache-info", action="store_true",
+                        help="show how much disk space lazytwister's cache uses, then exit")
+    parser.add_argument("--clear-cache", nargs="?", const="build", choices=["build", "all"],
+                        help="delete twister build output for this workspace (keeps results), "
+                             "or with 'all' everything lazytwister stored for every "
+                             "workspace; then exit")
     config = parser.add_mutually_exclusive_group()
     config.add_argument("--config", type=Path, default=None,
                         help=f"config file to use (default: nearest {CONFIG_NAME})")
@@ -127,7 +130,39 @@ def split_extra(argv: list[str]) -> tuple[list[str], list[str]]:
     return argv, []
 
 
+def cache_command(args: argparse.Namespace) -> None:
+    """--cache-info / --clear-cache: work on the cache without starting the TUI."""
+    workspace = find_workspace(Path.cwd())
+    state_dir = (args.state_dir or default_state_dir(workspace.topdir or Path.cwd())).resolve()
+    if args.cache_info:
+        rows = cache.workspaces()
+        if state_dir.parent != cache.cache_root() and (state_dir.is_dir()):
+            rows.append((state_dir, *cache.usage(state_dir)))
+        if not rows:
+            print(f"lazytwister cache is empty ({cache.cache_root()})")
+            return
+        total = 0
+        for path, builds, results in rows:
+            marker = "*" if path == state_dir else " "
+            print(f"{marker} {cache.human(builds):>9} build output  "
+                  f"{cache.human(results):>9} results   {path}")
+            total += builds + results
+        print(f"  {cache.human(total):>9} total   (* = this workspace)")
+        return
+    if args.clear_cache == "build":
+        freed = cache.clear(state_dir)
+        print(f"freed {cache.human(freed)} of twister build output in {state_dir}")
+    else:
+        dirs = {path for path, _, _ in cache.workspaces()} | {state_dir}
+        freed = sum(cache.clear(path, include_results=True) for path in sorted(dirs))
+        print(f"freed {cache.human(freed)}: build output and results for "
+              f"{len(dirs)} workspace(s)")
+
+
 def run(args: argparse.Namespace, extra: list[str]) -> None:
+    if args.cache_info or args.clear_cache:
+        cache_command(args)
+        return
     from .app import LazyTwisterApp
 
     LazyTwisterApp(config_from_args(args, extra)).run()

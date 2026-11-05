@@ -133,13 +133,28 @@ Its Python dependencies must also be installed in west's environment.
 | `ctrl+x` / `ctrl+r` | clear the queue and stop the running job / rediscover tests |
 | `z` | maximise / restore the focused panel |
 | `v` | layout: auto → landscape → portrait |
+| `C` | clear the cache |
 | `?` / `q` | help / quit (asks first if a job is running or queued) |
 
 ## Where things go
 
 Results and twister output are stored in `~/.cache/lazytwister/<workspace>/` (override
 with `--state-dir`). Nothing is written into your repo. All jobs share a single `run`
-output directory, which twister cleans at the start of each job.
+output directory, which lazytwister tells twister to delete at the start of each job
+(`--clobber-output`). The cache therefore only ever holds the last job's builds, unless
+you pass `-n/--no-clean`.
+
+To free up space:
+
+| Where | What it deletes |
+| --- | --- |
+| `C` in the app | twister build output, optionally the results history too (asks first) |
+| `lazytwister --cache-info` | nothing; shows the space used per workspace |
+| `lazytwister --clear-cache` | twister build output for this workspace; results are kept |
+| `lazytwister --clear-cache all` | everything lazytwister stored, for every workspace |
+
+Clearing only removes files lazytwister creates (`run*` build folders and `results.json`),
+and never follows symlinks.
 
 ## Development
 

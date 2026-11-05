@@ -20,6 +20,7 @@ from textual.widgets import Footer, Input, OptionList, RichLog, SelectionList, S
 from textual.widgets.option_list import Option
 from textual.widgets.tree import TreeNode
 
+from . import cache
 from .discovery import Discovery, Scenario, Workspace, discover
 from .jobs import Job, JobManager, NodeRef, RunOptions, RunTarget, make_target
 from .results import ResultStore, worst
@@ -174,6 +175,7 @@ HELP_TEXT = """\
   p          choose platforms            g   toggle integration mode (-G)
   w          toggle auto-run on change   ctrl+r  rediscover tests
   .          repeat the last run         ctrl+x  clear queue + stop running job
+  C          clear the cache (twister build output, optionally results)
   z          maximize / restore panel    v   layout: auto → landscape → portrait
   q          quit
 
@@ -216,6 +218,34 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def action_answer(self, value: bool) -> None:
         self.dismiss(value)
+
+
+class CacheScreen(ModalScreen[str | None]):
+    BINDINGS = [
+        Binding("b,enter", "choose('build')", "Build output"),
+        Binding("a", "choose('all')", "Everything"),
+        Binding("n,escape,q", "choose(None)", "Cancel"),
+    ]
+
+    def __init__(self, state_dir: Path, builds: int, results: int):
+        super().__init__()
+        self.state_dir, self.builds, self.results = state_dir, builds, results
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="cache-dialog", classes="panel") as dialog:
+            dialog.border_title = "Clear cache"
+            dialog.border_subtitle = "b: build output · a: everything · esc: cancel"
+            text = Text()
+            text.append(f"{self.state_dir}\n\n", style="bright_black")
+            text.append("b", style="bold")
+            text.append(f"  delete twister build output ({cache.human(self.builds)}); "
+                        "test results are kept\n")
+            text.append("a", style="bold")
+            text.append(f"  also delete the results history ({cache.human(self.results)})")
+            yield Static(text)
+
+    def action_choose(self, choice: str | None) -> None:
+        self.dismiss(choice)
 
 
 class InfoScreen(ModalScreen[None]):
@@ -269,11 +299,13 @@ class LazyTwisterApp(App):
     #jobs { height: 9; }
     #log { height: 1fr; }
     #details-panel { height: 40%; padding: 0 1; }
-    #platform-dialog, #help-dialog, #info-dialog, #confirm-dialog {
+    #platform-dialog, #help-dialog, #info-dialog, #confirm-dialog, #cache-dialog {
         width: 90; max-width: 95%; height: auto; max-height: 90%;
         padding: 1 2; background: $surface;
     }
-    PlatformScreen, HelpScreen, InfoScreen, ConfirmScreen { align: center middle; }
+    PlatformScreen, HelpScreen, InfoScreen, ConfirmScreen, CacheScreen {
+        align: center middle;
+    }
     #confirm-dialog { width: 60; }
 
     /* Portrait: stack the two columns. */
@@ -307,6 +339,7 @@ class LazyTwisterApp(App):
         Binding("ctrl+r", "rediscover", "Rediscover", show=False),
         Binding("z", "toggle_maximize", "Zoom"),
         Binding("v", "cycle_layout", "Layout", show=False),
+        Binding("C", "clear_cache", "Clear cache", show=False),
         Binding("1", "focus_panel('tests')", show=False),
         Binding("2", "focus_panel('status')", show=False),
         Binding("3", "focus_panel('jobs')", show=False),
@@ -1075,6 +1108,33 @@ class LazyTwisterApp(App):
                 self.exit()
 
         self.push_screen(ConfirmScreen(question), answered)
+
+    async def action_clear_cache(self) -> None:
+        if self.jobs.current is not None or self.jobs.queued():
+            self.notify("stop or finish the queued jobs before clearing the cache",
+                        severity="warning")
+            return
+        state_dir = self.config.state_dir
+        builds, results = await asyncio.to_thread(cache.usage, state_dir)
+
+        async def chosen(choice: str | None) -> None:
+            if choice is None:
+                return
+            everything = choice == "all"
+            try:
+                freed = await asyncio.to_thread(cache.clear, state_dir, everything)
+            except OSError as exc:
+                self.notify(f"could not clear cache: {exc}", severity="error")
+                return
+            if everything:
+                self.store.clear()
+                self.recompute_live()
+                self.refresh_labels()
+                self.update_status()
+                self.update_details()
+            self.notify(f"freed {cache.human(freed)}", timeout=3)
+
+        self.push_screen(CacheScreen(state_dir, builds, results), chosen)
 
     def action_repeat_last(self) -> None:
         if self.last_target is None:
