@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -10,6 +11,46 @@ from pathlib import Path
 # Worst first. Used to aggregate statuses across platforms / children.
 SEVERITY = ["error", "failed", "blocked", "passed", "skipped", "not run", "filtered", "none"]
 IGNORED_SUITE_STATUSES = {"filtered"}
+
+_SUITE_RE = re.compile(r"Running TESTSUITE (\w+)")
+_START_RE = re.compile(r"START - (\w+)")
+# "Assertion failed at CMAKE_SOURCE_DIR/src/main.c:12: suite_test_x: (a not equal to b)"
+# or, with CONFIG_ZTEST_ASSERT_VERBOSE=0, just "Assertion failed at <file>:<line>"
+_ASSERT_RE = re.compile(r"Assertion failed at (.+?):(\d+)(?::\s*\w+:\s*(.*))?\s*$")
+_RESULT_LINE_RE = re.compile(r"^\s*(FAIL|PASS|SKIP) - |^\s*START - |^=+$|^\s*$")
+
+
+def parse_ztest_failures(log: str | None) -> dict[str, dict]:
+    """Find the first failed assertion of each ztest case in a test log.
+
+    Returns {case_id: {"file", "line", "message"}} with case ids as in
+    twister.json ("suite.case"). `file` is as printed by ztest, which may
+    start with CMAKE_SOURCE_DIR/, ZEPHYR_BASE/ or WEST_TOPDIR/.
+    """
+    failures: dict[str, dict] = {}
+    if not log:
+        return failures
+    suite = case = None
+    lines = log.splitlines()
+    for index, line in enumerate(lines):
+        if match := _SUITE_RE.search(line):
+            suite, case = match.group(1), None
+        elif match := _START_RE.search(line):
+            case = match.group(1).replace("test_", "", 1)
+        elif (match := _ASSERT_RE.search(line)) and suite and case:
+            case_id = f"{suite}.{case}"
+            if case_id in failures:
+                continue
+            message = [match.group(3) or ""]
+            # zassert_*() user messages are printed on the following line.
+            if index + 1 < len(lines) and not _RESULT_LINE_RE.search(lines[index + 1]):
+                message.append(lines[index + 1].strip())
+            failures[case_id] = {
+                "file": match.group(1).strip(),
+                "line": int(match.group(2)),
+                "message": " — ".join(m for m in message if m),
+            }
+    return failures
 
 
 def worst(statuses) -> str | None:
@@ -36,6 +77,7 @@ class SuiteResult:
     reason: str | None = None
     log: str | None = None
     cases: dict[str, str] = field(default_factory=dict)
+    failures: dict[str, dict] = field(default_factory=dict)  # see parse_ztest_failures
 
 
 def _float(value) -> float:
@@ -59,6 +101,7 @@ def parse_twister_json(path: Path) -> list[SuiteResult]:
             for tc in suite.get("testcases", [])
             if tc.get("identifier")
         }
+        log = suite.get("log")
         results.append(
             SuiteResult(
                 scenario=str(suite.get("name")),
@@ -68,8 +111,9 @@ def parse_twister_json(path: Path) -> list[SuiteResult]:
                 build_time=_float(suite.get("build_time")),
                 finished_at=now,
                 reason=suite.get("reason"),
-                log=suite.get("log"),
+                log=log,
                 cases=cases,
+                failures=parse_ztest_failures(log) if status in ("failed", "error") else {},
             )
         )
     return results
@@ -122,6 +166,9 @@ class ResultStore:
                 cases = dict(previous.cases)
                 cases.update({k: v for k, v in result.cases.items() if k in only_cases})
                 result.cases = cases
+                failures = {k: v for k, v in previous.failures.items() if k not in only_cases}
+                failures.update({k: v for k, v in result.failures.items() if k in only_cases})
+                result.failures = failures
                 if result.status not in ("error",):
                     result.status = worst(cases.values()) or result.status
             platforms[result.platform] = result

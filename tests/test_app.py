@@ -155,3 +155,69 @@ async def test_status_bar_at_bottom_and_full_status_popup(test_tree, tmp_path, f
         assert tests_panel.region.bottom == bar.region.y  # tree uses the full left column
         await pilot.press("2")
         assert type(app.screen).__name__ == "InfoScreen"
+
+
+async def test_quit_asks_while_jobs_are_running(test_tree, tmp_path, fake_twister, monkeypatch):
+    monkeypatch.setenv("FAKE_DELAY", "10")
+    app = make_app(test_tree, tmp_path, fake_twister)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await wait_for(lambda: "s:drivers.beta" in app.node_index)
+        app.tree.move_cursor(app.node_index["s:drivers.beta"])
+        await pilot.press("enter")
+        await pilot.press("q")
+        assert type(app.screen).__name__ == "ConfirmScreen"
+        await pilot.press("n")
+        assert app.is_running and app.jobs.current is not None
+        await pilot.press("q", "y")
+        await pilot.pause()
+        assert not app.is_running
+
+
+async def test_repeat_last_run(test_tree, tmp_path, fake_twister):
+    app = make_app(test_tree, tmp_path, fake_twister)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await wait_for(lambda: "s:drivers.beta" in app.node_index)
+        await pilot.press("full_stop")  # nothing yet: no job
+        assert not app.jobs.jobs
+        app.tree.move_cursor(app.node_index["s:drivers.beta"])
+        await pilot.press("enter")
+        await wait_for(lambda: not app.jobs.jobs[0].active)
+        await pilot.press("full_stop")
+        assert len(app.jobs.jobs) == 2
+        assert app.jobs.jobs[1].target.signature() == app.jobs.jobs[0].target.signature()
+
+
+async def test_edit_jumps_to_failing_assert(test_tree, tmp_path, fake_twister, monkeypatch):
+    import contextlib
+
+    log = tmp_path / "fail.log"
+    log.write_text(
+        "Running TESTSUITE beta_suite\nSTART - test_one\n\n"
+        "    Assertion failed at CMAKE_SOURCE_DIR/src/test.c:1: beta_suite_test_one: "
+        "(1 not equal to 2)\nextra detail\n FAIL - test_one in 0.0 seconds\n"
+    )
+    monkeypatch.setenv("FAKE_FAIL", "drivers.beta")
+    monkeypatch.setenv("FAKE_LOG", str(log))
+    monkeypatch.setenv("EDITOR", "my-editor")
+    opened = []
+    monkeypatch.setattr("lazytwister.app.subprocess.run",
+                        lambda cmd, check: opened.append(cmd))
+    app = make_app(test_tree, tmp_path, fake_twister)
+    monkeypatch.setattr(app, "suspend", contextlib.nullcontext)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await wait_for(lambda: "s:drivers.beta" in app.node_index)
+        app.tree.move_cursor(app.node_index["s:drivers.beta"])
+        await pilot.press("enter")
+        await wait_for(lambda: app.store.scenario_status("drivers.beta") == "failed")
+        source = test_tree / "drivers" / "beta" / "src" / "test.c"
+
+        details = str(app.query_one("#details").render())
+        assert "src/test.c:1" in details and "1 not equal to 2" in details
+
+        app.node_index["s:drivers.beta"].expand()
+        await pilot.pause()
+        app.tree.move_cursor(app.node_index["c:drivers.beta:beta_suite.one"])
+        await pilot.pause()
+        assert "failed at" in str(app.query_one("#details").render())
+        await pilot.press("e")
+        assert opened == [["my-editor", "+1", str(source)]]

@@ -7,7 +7,7 @@ name = "lazytwister"
 version = "0.1.0"
 description = "lazygit-style TUI for Zephyr twister tests in west workspaces"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"  # tomllib
 dependencies = [
     "textual>=1.0",
     "watchfiles>=0.21",

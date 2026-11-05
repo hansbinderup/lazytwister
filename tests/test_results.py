@@ -54,3 +54,34 @@ def test_corrupt_state_file_is_ignored(tmp_path: Path):
     path = tmp_path / "results.json"
     path.write_text("{not json")
     assert ResultStore(path).scenario_status("x") is None
+
+
+DATA = Path(__file__).parent / "data"
+
+
+def test_parse_ztest_failures_from_real_log():
+    from lazytwister.results import parse_ztest_failures
+
+    failures = parse_ztest_failures((DATA / "ztest_fail.log").read_text())
+    assert failures == {"demo_suite.fails": {
+        "file": "CMAKE_SOURCE_DIR/src/main.c",
+        "line": 12,
+        "message": "(value not equal to 3) — value was 2",
+    }}
+
+
+def test_parse_ztest_failures_non_verbose_asserts():
+    from lazytwister.results import parse_ztest_failures
+
+    log = "Running TESTSUITE s\nSTART - test_x\n\n    Assertion failed at /abs/t.c:7\n FAIL - test_x\n"
+    assert parse_ztest_failures(log) == {"s.x": {"file": "/abs/t.c", "line": 7, "message": ""}}
+    assert parse_ztest_failures(None) == {}
+
+
+def test_case_only_merge_keeps_other_failures():
+    store = ResultStore(None)
+    store.merge([SuiteResult("a.b", "p", "failed", cases={"s.one": "failed", "s.two": "failed"},
+                             failures={"s.one": {"line": 1}, "s.two": {"line": 2}})])
+    store.merge([SuiteResult("a.b", "p", "passed", cases={"s.two": "passed"})],
+                only_cases={"s.two"})
+    assert store.for_scenario("a.b")["p"].failures == {"s.one": {"line": 1}}

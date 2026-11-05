@@ -39,7 +39,8 @@ for index, name in enumerate(scenarios, 1):
         "status": status,
         "execution_time": "0.01",
         "build_time": "1.5",
-        "log": "assertion failed\n" if status == "failed" else None,
+        "log": (Path(os.environ["FAKE_LOG"]).read_text() if os.environ.get("FAKE_LOG")
+                else "assertion failed\n") if status == "failed" else None,
         "testcases": [{"identifier": "suite.case_a", "status": status}],
     })
 (outdir / "twister.json").write_text(json.dumps({"environment": {}, "testsuites": suites}))

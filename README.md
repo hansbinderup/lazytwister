@@ -36,7 +36,11 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
   - The next job only starts once the previous twister process has fully exited,
     including after a cancel.
 - **Results** are kept across runs (per scenario and platform), with failing cases and
-  log tails shown in the details panel. `F` queues everything that failed.
+  log tails shown in the details panel. `F` queues everything that failed, and `.` repeats
+  the last run.
+- **Jump to the failure**: lazytwister reads where each failed assertion happened (file,
+  line and message) from the test log, and shows it in Details. Press `e` on a failed case
+  or scenario to open `$EDITOR` at the failing `zassert`.
 - **Auto-run** (`w`): when a file changes, lazytwister reruns the scenarios it belongs to.
   For a change outside a test directory (any path passed with `-w`), it repeats the last run.
 
@@ -71,6 +75,26 @@ lazytwister -T tests/lib -p native_sim/native/64 -j 8 -w lib -- --coverage
 
 Arguments after `--` are passed to every twister invocation.
 
+### Per-workspace config
+
+Put a `.lazytwister.toml` in your workspace, so running it there needs no flags.
+lazytwister looks in the current directory and its parents, up to the west workspace
+root. Command line options override the file, and `--no-config` ignores it.
+
+```toml
+roots = ["tests"]              # relative to this file
+platforms = ["native_sim/native/64"]
+integration = true             # pass -G
+verbose = true                 # pass -v (live per-scenario status)
+auto_run = false
+watch = ["lib", "subsys"]      # extra paths that trigger auto-run
+twister = "west twister"
+jobs = 8                       # twister -j
+extra_args = ["--coverage"]
+```
+
+Unknown keys and wrong types are rejected with a clear error.
+
 > Dev shells usually export a `PYTHONPATH` pointing at their own Python's packages.
 > lazytwister ignores it for its own imports, so the dev shell's packages can't shadow
 > lazytwister's dependencies. The variable is still passed on to twister. Set
@@ -99,17 +123,17 @@ Its Python dependencies must also be installed in west's environment.
 | `enter` | queue the node under the cursor |
 | `space` / `c` | mark or unmark a node / clear all marks |
 | `r` | queue the marked nodes as one job |
-| `a` / `F` | queue all / queue failed |
+| `a` / `F` / `.` | queue all / queue failed / repeat the last run |
 | `p` / `g` | choose platforms / toggle integration mode `-G` |
 | `w` | toggle auto-run on file change |
 | `/` / `f` | filter / show failed only |
-| `e` | open the yaml or test source in `$EDITOR` |
+| `e` | open `$EDITOR` at the failing assert, else at the test source or yaml |
 | Jobs panel: `x` / `J` `K` | cancel the selected job / move a queued job later or earlier |
 | Jobs panel: `r` / `L` | requeue the job / clear finished jobs |
 | `ctrl+x` / `ctrl+r` | clear the queue and stop the running job / rediscover tests |
 | `z` | maximise / restore the focused panel |
 | `v` | layout: auto → landscape → portrait |
-| `?` / `q` | help / quit |
+| `?` / `q` | help / quit (asks first if a job is running or queued) |
 
 ## Where things go
 

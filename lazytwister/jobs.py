@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shlex
 import signal
 import time
 from dataclasses import dataclass, field
@@ -82,12 +83,40 @@ class RunTarget:
         )
 
 
+def job_title(refs: list[NodeRef], shown: int = 2) -> str:
+    """'drivers.beta', or 'drivers.beta, lib/ +3' for several nodes."""
+    titles = [r.title for r in refs]
+    head = ", ".join(titles[:shown])
+    return head if len(titles) <= shown else f"{head} +{len(titles) - shown}"
+
+
+def display_command(cmd: list[str], cwd: Path) -> str:
+    """The command as shown in the output panel: relative paths, no -O noise."""
+    shown: list[str] = []
+    skip_next = False
+    for arg in cmd:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "-O":
+            skip_next = True
+            continue
+        path = Path(arg)
+        if path.is_absolute():
+            try:
+                arg = str(path.relative_to(cwd)) or "."
+            except ValueError:
+                pass
+        shown.append(shlex.quote(arg))
+    return " ".join(shown)
+
+
 def make_target(refs: list[NodeRef], discovery: Discovery) -> RunTarget:
     """Turn selected tree nodes into one twister invocation."""
     if not refs:
         raise ValueError("nothing selected")
     by_name = discovery.by_name()
-    title = refs[0].title if len(refs) == 1 else f"{len(refs)} selected"
+    title = job_title(refs)
 
     # Only folders: plain -T, so twister also picks up anything we failed to parse.
     if all(r.kind == "folder" for r in refs):
@@ -271,7 +300,7 @@ class JobManager:
         if job.state == "cancelled":  # cancelled before the task got to run
             self._finish(job, "cancelled")
             return
-        self._emit(job, "$ " + " ".join(job.command))
+        self._emit(job, "$ " + display_command(job.command, self.cwd))
         self.on_change(job)
 
         env = dict(os.environ, PYTHONUNBUFFERED="1")

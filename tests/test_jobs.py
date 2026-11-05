@@ -175,3 +175,18 @@ def test_parses_real_twister_lines():
     quiet = "ERROR   - native_sim/native/64      lib.x.native_sim   \x1b[31mFAILED\x1b[39m: Failed"
     match = FAILURE_LINE_RE.search(ANSI_RE.sub("", quiet))
     assert match and match.group(2) == "lib.x.native_sim"
+
+
+def test_job_title_and_display_command(test_tree, tmp_path):
+    from lazytwister.jobs import display_command, job_title
+
+    found = discover([test_tree])
+    many = refs(found, "drivers.beta", "lib.alpha.default", "lib.alpha.variant")
+    assert job_title(many[:1]) == "drivers.beta"
+    assert job_title(many[:2]) == "drivers.beta, lib.alpha.default"
+    assert job_title(many) == "drivers.beta, lib.alpha.default +1"
+    assert make_target(many, found).title == "drivers.beta, lib.alpha.default +1"
+
+    cmd = ["west", "twister", "-T", str(test_tree / "lib"), "-O", str(tmp_path / "out"),
+           "--", "-test=a::b c"]
+    assert display_command(cmd, test_tree.parent) == "west twister -T tests/lib -- '-test=a::b c'"

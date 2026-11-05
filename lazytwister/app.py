@@ -58,6 +58,7 @@ class AppConfig:
     options: RunOptions = field(default_factory=RunOptions)
     watch_paths: list[Path] = field(default_factory=list)
     auto_run: bool = False
+    config_file: Path | None = None
 
 
 # --------------------------------------------------------------------------
@@ -172,7 +173,7 @@ HELP_TEXT = """\
   a          queue all test roots        F   queue failed scenarios
   p          choose platforms            g   toggle integration mode (-G)
   w          toggle auto-run on change   ctrl+r  rediscover tests
-  ctrl+x     clear queue + stop running job
+  .          repeat the last run         ctrl+x  clear queue + stop running job
   z          maximize / restore panel    v   layout: auto → landscape → portrait
   q          quit
 
@@ -195,6 +196,26 @@ class HelpScreen(ModalScreen[None]):
         with VerticalScroll(id="help-dialog", classes="panel") as dialog:
             dialog.border_title = "Keybindings"
             yield Static(HELP_TEXT)
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    BINDINGS = [
+        Binding("y,enter", "answer(True)", "Yes"),
+        Binding("n,escape,q", "answer(False)", "No"),
+    ]
+
+    def __init__(self, question: str):
+        super().__init__()
+        self.question = question
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-dialog", classes="panel") as dialog:
+            dialog.border_title = "Quit?"
+            dialog.border_subtitle = "y: yes · n: no"
+            yield Static(self.question)
+
+    def action_answer(self, value: bool) -> None:
+        self.dismiss(value)
 
 
 class InfoScreen(ModalScreen[None]):
@@ -248,11 +269,12 @@ class LazyTwisterApp(App):
     #jobs { height: 9; }
     #log { height: 1fr; }
     #details-panel { height: 40%; padding: 0 1; }
-    #platform-dialog, #help-dialog, #info-dialog {
+    #platform-dialog, #help-dialog, #info-dialog, #confirm-dialog {
         width: 90; max-width: 95%; height: auto; max-height: 90%;
         padding: 1 2; background: $surface;
     }
-    PlatformScreen, HelpScreen, InfoScreen { align: center middle; }
+    PlatformScreen, HelpScreen, InfoScreen, ConfirmScreen { align: center middle; }
+    #confirm-dialog { width: 60; }
 
     /* Portrait: stack the two columns. */
     Screen.-portrait #main { layout: vertical; }
@@ -271,10 +293,11 @@ class LazyTwisterApp(App):
     """
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
+        Binding("q", "request_quit", "Quit"),
         Binding("question_mark", "help", "Help"),
-        Binding("a", "run_all", "Run all"),
-        Binding("F", "rerun_failed", "Rerun failed"),
+        Binding("a", "run_all", "Queue all"),
+        Binding("F", "rerun_failed", "Queue failed"),
+        Binding("full_stop", "repeat_last", "Repeat"),
         Binding("p", "platforms", "Platform"),
         Binding("g", "toggle_integration", "-G", show=False),
         Binding("w", "toggle_autorun", "Auto-run"),
@@ -631,6 +654,7 @@ class LazyTwisterApp(App):
 
         row("workspace", cfg.workspace.topdir or "(not in a west workspace)")
         row("roots", ", ".join(self._rel(r) for r in cfg.roots))
+        row("config", cfg.config_file or "none (.lazytwister.toml)")
         row("platforms", ", ".join(self.options.platforms) or "twister default")
         row("integration", on if self.options.integration else off)
         row("auto-run", on if self.auto_run else off)
@@ -757,8 +781,13 @@ class LazyTwisterApp(App):
                 status = result.cases.get(ref.case.id)
                 icon, style = self._icon(status)
                 row(platform, Text(f"{icon} {status or 'no result'}", style=style))
-            text.append("\nenter: run only this case (native targets, via -test=)",
-                        style="bright_black")
+            failure = self.failure_for(ref)
+            if failure is not None:
+                row("failed at", self._failure_text(*failure))
+            hint = "\nenter: queue only this case (native targets, via -test=)"
+            if failure is not None and failure[1] is not None:
+                hint += " · e: open at failing assert"
+            text.append(hint, style="bright_black")
             return text
 
         row("scenario", scenario.name)
@@ -788,7 +817,13 @@ class LazyTwisterApp(App):
                 text.append(f"    reason: {result.reason}\n", style="red")
             failed_cases = [c for c, s in result.cases.items() if s in ("failed", "error")]
             for case_id in failed_cases:
-                text.append(f"    ✘ {case_id}\n", style="red")
+                text.append(f"    ✘ {case_id}", style="red")
+                failure = result.failures.get(case_id)
+                if failure is not None:
+                    text.append("  ")
+                    text.append(self._failure_text(
+                        failure, self.resolve_source(failure["file"], scenario)))
+                text.append("\n")
             if result.log and result.status in ("failed", "error"):
                 tail = result.log.strip().splitlines()[-40:]
                 text.append("    ── log tail ──\n", style="bright_black")
@@ -1023,6 +1058,30 @@ class LazyTwisterApp(App):
         else:
             self.query_one(f"#{panel_id}").focus()
 
+    def action_request_quit(self) -> None:
+        current, queued = self.jobs.current, len(self.jobs.queued())
+        if current is None and not queued:
+            self.exit()
+            return
+        parts = []
+        if current is not None:
+            parts.append(f"#{current.id} {current.target.title} is still running")
+        if queued:
+            parts.append(f"{queued} job{'s' if queued != 1 else ''} waiting in the queue")
+        question = " and ".join(parts) + ".\nQuit and stop twister?"
+
+        def answered(yes: bool | None) -> None:
+            if yes:
+                self.exit()
+
+        self.push_screen(ConfirmScreen(question), answered)
+
+    def action_repeat_last(self) -> None:
+        if self.last_target is None:
+            self.notify("nothing to repeat yet", timeout=2)
+        else:
+            self._submit_target(self.last_target)
+
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
@@ -1030,7 +1089,11 @@ class LazyTwisterApp(App):
         ref = self._cursor_ref()
         if ref is None or ref.kind == "folder":
             return
-        if ref.kind == "case":
+        failure = self.failure_for(ref)
+        if failure is not None and failure[1] is not None:
+            # Jump straight to the failing assertion.
+            path, line = failure[1], failure[0]["line"]
+        elif ref.kind == "case":
             assert ref.case is not None
             path, line = ref.case.file, ref.case.line
         else:
@@ -1044,6 +1107,42 @@ class LazyTwisterApp(App):
                 subprocess.run([*editor, f"+{line}", str(path)], check=False)
         except Exception as exc:  # SuspendNotSupported, missing editor, …
             self.notify(f"could not open editor: {exc}", severity="error")
+
+    def resolve_source(self, file: str, scenario: Scenario) -> Path | None:
+        """Map a path printed by ztest (see Zephyr's -fmacro-prefix-map) to a real file."""
+        workspace = self.config.workspace
+        prefixes = {
+            "CMAKE_SOURCE_DIR": scenario.directory,
+            "ZEPHYR_BASE": workspace.zephyr_base,
+            "WEST_TOPDIR": workspace.topdir,
+        }
+        head, _, rest = file.partition("/")
+        if head in prefixes:
+            base = prefixes[head]
+            candidate = base / rest if base is not None else None
+        elif Path(file).is_absolute():
+            candidate = Path(file)
+        else:
+            candidate = scenario.directory / file
+        return candidate if candidate is not None and candidate.is_file() else None
+
+    def failure_for(self, ref: NodeRef) -> tuple[dict, Path | None] | None:
+        """First recorded assertion failure for a case, or for any case of a scenario."""
+        scenario = self.discovery.by_name().get(ref.scenario or "")
+        if scenario is None:
+            return None
+        for result in self.store.for_scenario(scenario.name).values():
+            for case_id, failure in result.failures.items():
+                if ref.kind == "scenario" or (ref.case is not None and case_id == ref.case.id):
+                    return failure, self.resolve_source(failure["file"], scenario)
+        return None
+
+    def _failure_text(self, failure: dict, path: Path | None) -> Text:
+        where = f"{self._rel(path) if path else failure['file']}:{failure['line']}"
+        text = Text(where, style="bold red")
+        if failure.get("message"):
+            text.append(f"  {failure['message']}", style="red")
+        return text
 
     @on(Tree.NodeHighlighted, "#tests")
     def _node_highlighted(self) -> None:

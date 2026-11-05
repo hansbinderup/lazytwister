@@ -9,6 +9,7 @@ import shlex
 import shutil
 from pathlib import Path
 
+from .config import CONFIG_NAME, ConfigError, FileConfig, find_config, load_config
 from .discovery import default_roots, find_workspace
 from .jobs import RunOptions
 
@@ -31,7 +32,9 @@ def build_parser(prog: str = "lazytwister") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description="lazygit-style TUI for running Zephyr twister tests in a west workspace.",
-        epilog="Arguments after '--' are passed to every twister invocation.",
+        epilog=f"Arguments after '--' are passed to every twister invocation. Defaults can be "
+               f"set in a {CONFIG_NAME} file in the current directory or any parent up to the "
+               "west workspace; command line options override it.",
     )
     add_arguments(parser)
     return parser
@@ -42,21 +45,26 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                         help="test root to discover/run (repeatable; default: ./tests or .)")
     parser.add_argument("-p", "--platform", action="append", default=[],
                         help="twister platform (repeatable; default: twister's defaults)")
-    parser.add_argument("--no-integration", action="store_true",
+    parser.add_argument("--no-integration", action="store_true", default=None,
                         help="don't pass -G (integration mode) to twister")
-    parser.add_argument("-q", "--quiet", action="store_true",
+    parser.add_argument("-q", "--quiet", action="store_true", default=None,
                         help="don't pass -v to twister (disables live per-scenario status)")
     parser.add_argument("-j", "--jobs", type=int, default=None,
                         help="twister -j (default: twister's own default)")
     parser.add_argument("-w", "--watch", action="append", type=Path, default=[],
                         help="extra path to watch for changes (repeatable), e.g. lib/")
-    parser.add_argument("--auto-run", action="store_true",
+    parser.add_argument("--auto-run", action="store_true", default=None,
                         help="start with auto-run on file change enabled")
     parser.add_argument("--twister", default=None,
                         help="twister command (default: 'west twister')")
     parser.add_argument("--state-dir", type=Path, default=None,
                         help="where results and twister output go "
                              "(default: ~/.cache/lazytwister/<workspace>)")
+    config = parser.add_mutually_exclusive_group()
+    config.add_argument("--config", type=Path, default=None,
+                        help=f"config file to use (default: nearest {CONFIG_NAME})")
+    config.add_argument("--no-config", action="store_true",
+                        help=f"ignore {CONFIG_NAME} files")
 
 
 def config_from_args(args: argparse.Namespace, extra: list[str]):
@@ -64,13 +72,32 @@ def config_from_args(args: argparse.Namespace, extra: list[str]):
 
     cwd = Path.cwd()
     workspace = find_workspace(cwd)
-    roots = [r.resolve() for r in args.testsuite_root] or default_roots(cwd)
+    file_config = FileConfig()
+    if not args.no_config:
+        path = args.config or find_config(cwd, workspace.topdir)
+        if args.config and not args.config.is_file():
+            raise SystemExit(f"lazytwister: config file not found: {args.config}")
+        if path:
+            try:
+                file_config = load_config(path)
+            except ConfigError as exc:
+                raise SystemExit(f"lazytwister: {exc}") from None
+
+    def pick(cli_value, file_value, default):
+        return cli_value if cli_value is not None else (
+            file_value if file_value is not None else default
+        )
+
+    roots = (
+        [r.resolve() for r in args.testsuite_root] or file_config.roots or default_roots(cwd)
+    )
     missing = [r for r in roots if not r.is_dir()]
     if missing:
         raise SystemExit(f"lazytwister: test root does not exist: {missing[0]}")
     if args.jobs is not None and args.jobs < 1:
         raise SystemExit("lazytwister: --jobs must be >= 1")
-    twister = shlex.split(args.twister) if args.twister else default_twister_cmd(
+    twister_str = args.twister or file_config.twister
+    twister = shlex.split(twister_str) if twister_str else default_twister_cmd(
         workspace.zephyr_base
     )
     return AppConfig(
@@ -80,14 +107,16 @@ def config_from_args(args: argparse.Namespace, extra: list[str]):
         twister_cmd=twister,
         state_dir=(args.state_dir or default_state_dir(workspace.topdir or cwd)).resolve(),
         options=RunOptions(
-            platforms=args.platform,
-            integration=not args.no_integration,
-            verbose=not args.quiet,
-            extra_args=extra,
-            jobs=args.jobs,
+            platforms=args.platform or file_config.platforms,
+            integration=pick(None if args.no_integration is None else False,
+                             file_config.integration, True),
+            verbose=pick(None if args.quiet is None else False, file_config.verbose, True),
+            extra_args=[*file_config.extra_args, *extra],
+            jobs=pick(args.jobs, file_config.jobs, None),
         ),
-        watch_paths=[w.resolve() for w in args.watch],
-        auto_run=args.auto_run,
+        watch_paths=[w.resolve() for w in args.watch] or file_config.watch,
+        auto_run=pick(args.auto_run, file_config.auto_run, False),
+        config_file=file_config.path,
     )
 
 
