@@ -10,10 +10,11 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
 │   ▾ ✔ lib/  1/7                         │├[4] Output ───────────────────────────┤
 │     ▾ ✔ libraries.encoding.json         ││ $ west twister -T … -s … -G -i -v …  │
 │         ✔ lib_json_test.json_encoding   ││ INFO - 1/1 native_sim/native/64 …    │
-├[2] Status ──────────────────────────────┤├[5] Details ──────────────────────────┤
-│ platforms  twister default              ││ scenario  libraries.encoding.json    │
-│ queue      running #3, 1 queued         ││ last results / failing cases / log   │
+│   ▸ · subsys/  0/2                      │├[5] Details ──────────────────────────┤
+│                                         ││ scenario  libraries.encoding.json    │
+│                                         ││ last results / failing cases / log   │
 └─────────────────────────────────────────┘└──────────────────────────────────────┘
+ zephyrproject · tests · default platforms · -G · 12 scenarios ✔1 ✘1
 ```
 
 ## Features
@@ -46,8 +47,10 @@ The layout follows the terminal size and switches live as you resize or split pa
 - **Landscape** (wide terminals): two columns, as above.
 - **Portrait** (fewer than 110 columns, or fewer columns than twice the number of rows):
   the panels are stacked top to bottom, so long scenario names get the full width.
-- **Compact** (small terminals): Status and Details are hidden. The settings are summarised
-  in the Jobs panel's subtitle, and `2` / `5` open those panels as pop-ups.
+- **Compact** (small terminals): Details is hidden, and `5` opens it as a pop-up.
+
+The status bar along the bottom always shows the workspace, test roots, platforms, `-G`,
+auto-run and the pass/fail totals. `2` opens the full status as a pop-up.
 
 `v` overrides the automatic choice, and `z` maximises the focused panel.
 
@@ -91,7 +94,8 @@ Its Python dependencies must also be installed in west's environment.
 
 | Key | Action |
 | --- | --- |
-| `1`–`5`, `tab` | focus a panel |
+| `1`, `3`–`5`, `tab` | focus a panel |
+| `2` | full status pop-up |
 | `enter` | queue the node under the cursor |
 | `space` / `c` | mark or unmark a node / clear all marks |
 | `r` | queue the marked nodes as one job |

@@ -141,3 +141,17 @@ async def test_zoom_maximizes_focused_panel(test_tree, tmp_path, fake_twister):
         assert app.main_screen.maximized is None
         await pilot.press("4", "z")
         assert app.main_screen.maximized is app.query_one("#log")
+
+
+async def test_status_bar_at_bottom_and_full_status_popup(test_tree, tmp_path, fake_twister):
+    app = make_app(test_tree, tmp_path, fake_twister)
+    async with app.run_test(size=(200, 50)) as pilot:
+        await wait_for(lambda: "s:drivers.beta" in app.node_index)
+        bar = app.query_one("#statusbar")
+        assert bar.region.height == 1
+        assert bar.region.y == 50 - 2  # just above the footer
+        assert "3 scenarios" in str(bar.render())
+        tests_panel = app.query_one("#tests-panel")
+        assert tests_panel.region.bottom == bar.region.y  # tree uses the full left column
+        await pilot.press("2")
+        assert type(app.screen).__name__ == "InfoScreen"

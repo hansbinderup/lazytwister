@@ -156,7 +156,8 @@ class PlatformScreen(ModalScreen[list[str] | None]):
 
 
 HELP_TEXT = """\
-[b]Panels[/]   1 tests · 2 status · 3 jobs · 4 output · 5 details · tab cycles
+[b]Panels[/]   1 tests · 3 jobs · 4 output · 5 details · tab cycles
+           2 full status (the bar at the bottom is the short version)
 
 [b]Tests[/]
   enter      queue node under cursor (folder → whole folder, scenario, single ztest case)
@@ -176,7 +177,7 @@ HELP_TEXT = """\
   q          quit
 
 Layout adapts to the terminal: two columns when wide, stacked when narrow or
-tall, and compact (status/details as popups via 2/5) when small.
+tall, and compact (details as a popup via 5) when small.
 
 [b]Jobs[/]   one job runs at a time; the rest wait in the queue
   x cancel (queued or running) · J/K move queued job later/earlier
@@ -221,7 +222,8 @@ class InfoScreen(ModalScreen[None]):
 class LazyTwisterApp(App):
     TITLE = "lazytwister"
     CSS = """
-    Screen { layout: horizontal; }
+    Screen { layout: vertical; }
+    #main { layout: horizontal; height: 1fr; }
     .panel {
         border: round $panel-lighten-2;
         border-title-color: $text-muted;
@@ -239,7 +241,10 @@ class LazyTwisterApp(App):
     #tests { border: none; background: $surface; padding: 0; }
     #filter { display: none; border: none; height: 1; padding: 0 1; }
     #filter.visible { display: block; }
-    #status { height: auto; max-height: 12; padding: 0 1; }
+    #statusbar {
+        height: 1; padding: 0 1;
+        background: $panel; color: $text-muted;
+    }
     #jobs { height: 9; }
     #log { height: 1fr; }
     #details-panel { height: 40%; padding: 0 1; }
@@ -250,16 +255,15 @@ class LazyTwisterApp(App):
     PlatformScreen, HelpScreen, InfoScreen { align: center middle; }
 
     /* Portrait: stack the two columns. */
-    Screen.-portrait { layout: vertical; }
+    Screen.-portrait #main { layout: vertical; }
     Screen.-portrait #left, Screen.-portrait #right { width: 100%; min-width: 0; }
     Screen.-portrait #left { height: 45%; }
     Screen.-portrait #right { height: 1fr; }
-    Screen.-portrait #status { max-height: 9; }
     Screen.-portrait #jobs { height: 7; }
     Screen.-portrait #details-panel { height: 35%; }
 
     /* Compact: too small for everything — status/details become popups. */
-    Screen.-compact #status, Screen.-compact #details-panel { display: none; }
+    Screen.-compact #details-panel { display: none; }
     Screen.-compact #jobs { height: 5; }
     Screen.-compact.-portrait #left { height: 55%; }
     Screen.-compact #left { min-width: 30; }
@@ -321,29 +325,27 @@ class LazyTwisterApp(App):
     # -- layout ------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="left"):
-            with Panel(id="tests-panel", classes="panel") as tests_panel:
-                tests_panel.border_title = "[1] Tests"
-                tree = TestTree("tests", id="tests")
-                tree.show_root = False
-                tree.auto_expand = False
-                tree.guide_depth = 3
-                yield tree
-                yield FilterInput(placeholder="filter…", id="filter")
-            status = Static(id="status", classes="panel")
-            status.border_title = "[2] Status"
-            status.can_focus = True
-            yield status
-        with Vertical(id="right"):
-            jobs = JobList(id="jobs", classes="panel")
-            jobs.border_title = "[3] Jobs"
-            yield jobs
-            log = RichLog(id="log", classes="panel", markup=False, highlight=False, wrap=False)
-            log.border_title = "[4] Output"
-            yield log
-            with ScrollPanel(id="details-panel", classes="panel") as details:
-                details.border_title = "[5] Details"
-                yield Static(id="details")
+        with Horizontal(id="main"):
+            with Vertical(id="left"):
+                with Panel(id="tests-panel", classes="panel") as tests_panel:
+                    tests_panel.border_title = "[1] Tests"
+                    tree = TestTree("tests", id="tests")
+                    tree.show_root = False
+                    tree.auto_expand = False
+                    tree.guide_depth = 3
+                    yield tree
+                    yield FilterInput(placeholder="filter…", id="filter")
+            with Vertical(id="right"):
+                jobs = JobList(id="jobs", classes="panel")
+                jobs.border_title = "[3] Jobs"
+                yield jobs
+                log = RichLog(id="log", classes="panel", markup=False, highlight=False, wrap=False)
+                log.border_title = "[4] Output"
+                yield log
+                with ScrollPanel(id="details-panel", classes="panel") as details:
+                    details.border_title = "[5] Details"
+                    yield Static(id="details")
+        yield Static(id="statusbar")
         yield Footer()
 
     @property
@@ -388,9 +390,7 @@ class LazyTwisterApp(App):
         screen.set_class(self.orientation == "portrait", "-portrait")
         screen.set_class(self.compact, "-compact")
         # Hidden panels can't keep focus.
-        if self.compact and self.focused is not None and self.focused.id in (
-            "status", "details-panel"
-        ):
+        if self.compact and self.focused is not None and self.focused.id == "details-panel":
             self.tree.focus()
         self.refresh_jobs()
 
@@ -585,9 +585,36 @@ class LazyTwisterApp(App):
     # -- panels ---------------------------------------------------------------
 
     def update_status(self) -> None:
-        self.query_one("#status", Static).update(self._status_text())
-        if getattr(self, "compact", False):
-            self.query_one(JobList).border_subtitle = self.short_status()
+        self.query_one("#statusbar", Static).update(self._status_line())
+
+    def _status_line(self) -> Text:
+        """The one-line status bar at the bottom; `2` shows the full status."""
+        names = [s.name for s in self.discovery.scenarios]
+        statuses = [self.store.scenario_status(n) for n in names]
+        passed = statuses.count("passed")
+        failed = sum(statuses.count(s) for s in ("failed", "error", "blocked"))
+        topdir = self.config.workspace.topdir
+        sep = (" · ", "bright_black")
+        text = Text(no_wrap=True, overflow="ellipsis")
+        text.append(topdir.name if topdir else "no west workspace", style="bold")
+        text.append(*sep)
+        text.append(", ".join(self._rel(r) for r in self.config.roots))
+        text.append(*sep)
+        text.append(", ".join(self.options.platforms) or "default platforms")
+        if self.options.integration:
+            text.append(*sep)
+            text.append("-G")
+        if self.auto_run:
+            text.append(*sep)
+            text.append("auto-run", style="yellow")
+        text.append(*sep)
+        text.append(f"{len(names)} scenarios ")
+        text.append(f"✔{passed} ", style="green")
+        text.append(f"✘{failed}", style="red" if failed else "bright_black")
+        if self.discovery.errors:
+            text.append(*sep)
+            text.append(f"{len(self.discovery.errors)} yaml errors", style="bold red")
+        return text
 
     def _status_text(self) -> Text:
         cfg = self.config
@@ -664,16 +691,10 @@ class LazyTwisterApp(App):
         job_list.border_subtitle = self.short_status()
 
     def short_status(self) -> str:
-        """One-line settings summary; the only status shown in compact layout."""
+        """Queue summary shown in the Jobs panel's subtitle."""
         parts = ["running" if self.jobs.current else "idle"]
         if self.jobs.queued():
             parts.append(f"{len(self.jobs.queued())} queued")
-        if getattr(self, "compact", False):
-            parts.append(", ".join(self.options.platforms) or "default platforms")
-            if self.options.integration:
-                parts.append("-G")
-            if self.auto_run:
-                parts.append("auto-run")
         return " · ".join(parts)
 
     def show_job_log(self, job: Job | None) -> None:
@@ -992,7 +1013,7 @@ class LazyTwisterApp(App):
         self.notify(f"{len(self.discovery.scenarios)} scenarios", timeout=2)
 
     def action_focus_panel(self, panel_id: str) -> None:
-        if self.compact and panel_id == "status":
+        if panel_id == "status":
             self.push_screen(InfoScreen("Status", self._status_text()))
         elif self.compact and panel_id == "details-panel":
             node = self.tree.cursor_node
