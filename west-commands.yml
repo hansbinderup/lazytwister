@@ -1,0 +1,6 @@
+west-commands:
+  - file: lazywest/west_ext.py
+    commands:
+      - name: tui
+        class: LazyWestCommand
+        help: lazygit-style TUI for twister tests
