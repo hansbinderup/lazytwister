@@ -11,10 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from west.commands import WestCommand  # noqa: E402
 
-from lazywest.cli import add_arguments, run  # noqa: E402
+from lazytwister.cli import add_arguments, run  # noqa: E402
 
 
-class LazyWestCommand(WestCommand):
+class LazyTwisterCommand(WestCommand):
     def __init__(self):
         super().__init__(
             "tui",

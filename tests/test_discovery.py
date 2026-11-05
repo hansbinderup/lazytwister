@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from lazywest.discovery import default_roots, discover, find_workspace
+from lazytwister.discovery import default_roots, discover, find_workspace
 
 
 def test_discovers_scenarios_and_merges_common(test_tree: Path):

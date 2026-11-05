@@ -292,7 +292,7 @@ class JobManager:
             self._emit(job, f"failed to start twister: {exc}")
             self._emit(
                 job,
-                "hint: start lazywest from the workspace dev shell (e.g. `nix develop`) "
+                "hint: start lazytwister from the workspace dev shell (e.g. `nix develop`) "
                 "or pass --twister '<command>'",
             )
             self._finish(job, "error")

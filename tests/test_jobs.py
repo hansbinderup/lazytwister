@@ -2,8 +2,8 @@ import asyncio
 import json
 from pathlib import Path
 
-from lazywest.discovery import discover
-from lazywest.jobs import JobManager, NodeRef, RunOptions, build_command, make_target
+from lazytwister.discovery import discover
+from lazytwister.jobs import JobManager, NodeRef, RunOptions, build_command, make_target
 
 
 def refs(found, *names):
@@ -118,7 +118,7 @@ async def test_missing_twister_reports_error(test_tree, tmp_path):
 
 
 def test_parses_real_twister_lines():
-    from lazywest.jobs import FAILURE_LINE_RE, RESULT_LINE_RE, ANSI_RE
+    from lazytwister.jobs import FAILURE_LINE_RE, RESULT_LINE_RE, ANSI_RE
 
     verbose = ("INFO    -  3/12 native_sim/native/64      libraries.encoding.json"
                "                            \x1b[32mPASSED\x1b[39m (native 0.004s <host>)")

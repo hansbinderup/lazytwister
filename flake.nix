@@ -1,5 +1,5 @@
 {
-  description = "lazywest - lazygit-style TUI for Zephyr twister tests";
+  description = "lazytwister - lazygit-style TUI for Zephyr twister tests";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -9,8 +9,8 @@
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in {
       packages = forAll (pkgs: rec {
-        lazywest = pkgs.python3Packages.buildPythonApplication {
-          pname = "lazywest";
+        lazytwister = pkgs.python3Packages.buildPythonApplication {
+          pname = "lazytwister";
           version = "0.1.0";
           pyproject = true;
           src = ./.;
@@ -18,7 +18,7 @@
           dependencies = with pkgs.python3Packages; [ textual watchfiles pyyaml ];
           nativeCheckInputs = with pkgs.python3Packages; [ pytestCheckHook pytest-asyncio ];
         };
-        default = lazywest;
+        default = lazytwister;
       });
 
       devShells = forAll (pkgs: {

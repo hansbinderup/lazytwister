@@ -19,7 +19,7 @@ SKIP_DIRS = frozenset(
     {
         ".git",
         ".west",
-        ".lazywest",
+        ".lazytwister",
         ".venv",
         "venv",
         "__pycache__",

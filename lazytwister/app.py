@@ -1,4 +1,4 @@
-"""The lazywest Textual application."""
+"""The lazytwister Textual application."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ JOB_ICON = {
     "error": ("!", "bold red"),
     "cancelled": ("⊘", "bright_black"),
 }
-WATCH_IGNORE_PARTS = {".git", ".lazywest", "build", "__pycache__", ".venv"}
+WATCH_IGNORE_PARTS = {".git", ".lazytwister", "build", "__pycache__", ".venv"}
 WATCH_IGNORE_SUFFIXES = (".swp", ".swx", ".tmp", "~", ".pyc")
 
 
@@ -186,8 +186,8 @@ class HelpScreen(ModalScreen[None]):
 # --------------------------------------------------------------------------
 
 
-class LazyWestApp(App):
-    TITLE = "lazywest"
+class LazyTwisterApp(App):
+    TITLE = "lazytwister"
     CSS = """
     Screen { layout: horizontal; }
     .panel {

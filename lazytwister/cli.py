@@ -1,4 +1,4 @@
-"""Command line entry point (`lazywest` and `west tui`)."""
+"""Command line entry point (`lazytwister` and `west tui`)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .jobs import RunOptions
 def default_state_dir(anchor: Path) -> Path:
     cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
     slug = re.sub(r"[^A-Za-z0-9._-]+", "_", str(anchor.resolve())).strip("_")
-    return cache / "lazywest" / slug
+    return cache / "lazytwister" / slug
 
 
 def default_twister_cmd(zephyr_base: Path | None) -> list[str]:
@@ -27,7 +27,7 @@ def default_twister_cmd(zephyr_base: Path | None) -> list[str]:
     return ["west", "twister"]
 
 
-def build_parser(prog: str = "lazywest") -> argparse.ArgumentParser:
+def build_parser(prog: str = "lazytwister") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description="lazygit-style TUI for running Zephyr twister tests in a west workspace.",
@@ -58,7 +58,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                         help="twister command (default: 'west twister')")
     parser.add_argument("--state-dir", type=Path, default=None,
                         help="where results and twister output go "
-                             "(default: ~/.cache/lazywest/<workspace>)")
+                             "(default: ~/.cache/lazytwister/<workspace>)")
 
 
 def config_from_args(args: argparse.Namespace, extra: list[str]):
@@ -69,11 +69,11 @@ def config_from_args(args: argparse.Namespace, extra: list[str]):
     roots = [r.resolve() for r in args.testsuite_root] or default_roots(cwd)
     missing = [r for r in roots if not r.is_dir()]
     if missing:
-        raise SystemExit(f"lazywest: test root does not exist: {missing[0]}")
+        raise SystemExit(f"lazytwister: test root does not exist: {missing[0]}")
     if args.parallel < 1:
-        raise SystemExit("lazywest: --parallel must be >= 1")
+        raise SystemExit("lazytwister: --parallel must be >= 1")
     if args.jobs is not None and args.jobs < 1:
-        raise SystemExit("lazywest: --jobs must be >= 1")
+        raise SystemExit("lazytwister: --jobs must be >= 1")
     twister = shlex.split(args.twister) if args.twister else default_twister_cmd(
         workspace.zephyr_base
     )
@@ -104,9 +104,9 @@ def split_extra(argv: list[str]) -> tuple[list[str], list[str]]:
 
 
 def run(args: argparse.Namespace, extra: list[str]) -> None:
-    from .app import LazyWestApp
+    from .app import LazyTwisterApp
 
-    LazyWestApp(config_from_args(args, extra)).run()
+    LazyTwisterApp(config_from_args(args, extra)).run()
 
 
 def main(argv: list[str] | None = None) -> None:

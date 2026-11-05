@@ -3,13 +3,13 @@
 import asyncio
 from pathlib import Path
 
-from lazywest.app import AppConfig, LazyWestApp
-from lazywest.discovery import Workspace
-from lazywest.jobs import RunOptions
+from lazytwister.app import AppConfig, LazyTwisterApp
+from lazytwister.discovery import Workspace
+from lazytwister.jobs import RunOptions
 
 
-def make_app(test_tree: Path, tmp_path: Path, fake_twister) -> LazyWestApp:
-    return LazyWestApp(AppConfig(
+def make_app(test_tree: Path, tmp_path: Path, fake_twister) -> LazyTwisterApp:
+    return LazyTwisterApp(AppConfig(
         cwd=tmp_path,
         roots=[test_tree],
         workspace=Workspace(None, None),

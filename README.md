@@ -1,4 +1,4 @@
-# lazywest
+# lazytwister
 
 A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** workspace.
 
@@ -32,7 +32,7 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
     directory, and twister's `-j` is split between jobs.
 - **Results** are kept across runs (per scenario and platform), with failing cases and
   log tails shown in the details panel. `F` reruns everything that failed.
-- **Auto-run** (`w`): when a file changes, lazywest reruns the scenarios it belongs to.
+- **Auto-run** (`w`): when a file changes, lazytwister reruns the scenarios it belongs to.
   For a change outside a test directory (any path passed with `-w`), it repeats the last run.
 
 ## Install
@@ -46,25 +46,25 @@ SDK are on `PATH`:
 
 ```sh
 cd ~/zephyrproject && nix develop
-~/repos/lazywest/.venv/bin/lazywest                # defaults to ./tests
-lazywest -T tests/lib -p native_sim/native/64 -P 3 -w lib -- --coverage
+~/repos/lazytwister/.venv/bin/lazytwister                # defaults to ./tests
+lazytwister -T tests/lib -p native_sim/native/64 -P 3 -w lib -- --coverage
 ```
 
 Arguments after `--` are passed to every twister invocation.
 
 > Dev shells usually export a `PYTHONPATH` pointing at their own Python's packages.
-> lazywest ignores it for its own imports, so the dev shell's packages can't shadow
-> lazywest's dependencies. The variable is still passed on to twister. Set
-> `LAZYWEST_KEEP_PYTHONPATH=1` to disable this.
+> lazytwister ignores it for its own imports, so the dev shell's packages can't shadow
+> lazytwister's dependencies. The variable is still passed on to twister. Set
+> `LAZYTWISTER_KEEP_PYTHONPATH=1` to disable this.
 
 ### As `west tui`
 
-West extension commands must come from a project in the manifest. Add lazywest to
+West extension commands must come from a project in the manifest. Add lazytwister to
 your `west.yml`:
 
 ```yaml
-    - name: lazywest
-      path: tools/lazywest
+    - name: lazytwister
+      path: tools/lazytwister
       url: <git remote of this repo>
       west-commands: west-commands.yml
 ```
@@ -91,7 +91,7 @@ Its Python dependencies must also be installed in west's environment.
 
 ## Where things go
 
-Results and twister output are stored in `~/.cache/lazywest/<workspace>/` (override
+Results and twister output are stored in `~/.cache/lazytwister/<workspace>/` (override
 with `--state-dir`). Nothing is written into your repo. There is one `run-N` directory
 per parallel slot, and twister cleans it before reusing it.
 

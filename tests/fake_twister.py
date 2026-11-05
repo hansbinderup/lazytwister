@@ -1,4 +1,4 @@
-"""Stand-in for twister: parses the args lazywest passes, prints twister-like
+"""Stand-in for twister: parses the args lazytwister passes, prints twister-like
 progress lines and writes a twister.json into the -O directory."""
 
 import argparse

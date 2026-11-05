@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from lazywest.results import ResultStore, SuiteResult, parse_twister_json, worst
+from lazytwister.results import ResultStore, SuiteResult, parse_twister_json, worst
 
 
 def test_worst():

@@ -1,7 +1,7 @@
-"""Entry point that isolates lazywest from a foreign PYTHONPATH.
+"""Entry point that isolates lazytwister from a foreign PYTHONPATH.
 
 Zephyr/west dev shells (e.g. `nix develop`) export a PYTHONPATH pointing at
-*their* interpreter's site-packages. When lazywest runs from its own
+*their* interpreter's site-packages. When lazytwister runs from its own
 environment, those entries shadow its dependencies (older typing_extensions,
 C extensions built for another Python, ...) and imports break.
 
@@ -18,7 +18,7 @@ import sys
 
 def isolate_sys_path() -> None:
     pythonpath = os.environ.get("PYTHONPATH")
-    if not pythonpath or os.environ.get("LAZYWEST_KEEP_PYTHONPATH"):
+    if not pythonpath or os.environ.get("LAZYTWISTER_KEEP_PYTHONPATH"):
         return
     foreign = {os.path.realpath(p) for p in pythonpath.split(os.pathsep) if p}
     sys.path[:] = [p for p in sys.path if os.path.realpath(p or os.curdir) not in foreign]
@@ -26,7 +26,7 @@ def isolate_sys_path() -> None:
 
 def main() -> None:
     isolate_sys_path()
-    from lazywest.cli import main as cli_main
+    from lazytwister.cli import main as cli_main
 
     cli_main()
 
