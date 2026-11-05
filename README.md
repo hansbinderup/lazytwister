@@ -52,6 +52,11 @@ lazywest -T tests/lib -p native_sim/native/64 -P 3 -w lib -- --coverage
 
 Arguments after `--` are passed to every twister invocation.
 
+> Dev shells usually export a `PYTHONPATH` pointing at their own Python's packages.
+> lazywest ignores it for its own imports, so the dev shell's packages can't shadow
+> lazywest's dependencies. The variable is still passed on to twister. Set
+> `LAZYWEST_KEEP_PYTHONPATH=1` to disable this.
+
 ### As `west tui`
 
 West extension commands must come from a project in the manifest. Add lazywest to

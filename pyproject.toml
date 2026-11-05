@@ -18,7 +18,7 @@ dependencies = [
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
-lazywest = "lazywest.cli:main"
+lazywest = "lazywest.launcher:main"
 
 [tool.setuptools]
 packages = ["lazywest"]
