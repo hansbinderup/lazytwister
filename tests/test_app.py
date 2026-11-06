@@ -3,7 +3,7 @@
 import asyncio
 from pathlib import Path
 
-from lazytwister.app import AppConfig, LazyTwisterApp
+from lazytwister.app import AppConfig, LazyTwisterApp, count_text
 from lazytwister.discovery import Workspace
 from lazytwister.jobs import RunOptions
 
@@ -249,3 +249,10 @@ async def test_clear_cache_from_the_app(test_tree, tmp_path, fake_twister):
         await pilot.press("a")
         await wait_for(lambda: not (state / "results.json").exists())
         assert app.store.scenario_status("drivers.beta") is None
+
+
+def test_count_text_splits_passed_failed_and_not_run():
+    text = count_text(["passed", "passed", "filtered", "failed", "error", None, "skipped"])
+    assert text.plain == "2/2/3"
+    number_styles = [span.style for span in text.spans if span.style != "bright_black"]
+    assert number_styles == ["green", "red", "blue"]

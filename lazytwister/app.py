@@ -45,6 +45,27 @@ JOB_ICON = {
     "error": ("!", "bold red"),
     "cancelled": ("⊘", "bright_black"),
 }
+FAILED_STATUSES = ("failed", "error", "blocked")
+
+
+def count_text(statuses: list[str | None]) -> Text:
+    """`passed/failed/not run` counts in green/red/blue, e.g. `2/0/1`.
+
+    "Not run" is everything that neither passed nor failed: skipped, filtered,
+    build-only, queued, running or never run.
+    """
+    passed = statuses.count("passed")
+    failed = sum(statuses.count(s) for s in FAILED_STATUSES)
+    other = len(statuses) - passed - failed
+    text = Text()
+    text.append(str(passed), style="green")
+    text.append("/", style="bright_black")
+    text.append(str(failed), style="red")
+    text.append("/", style="bright_black")
+    text.append(str(other), style="blue")
+    return text
+
+
 WATCH_IGNORE_PARTS = {".git", ".lazytwister", "build", "__pycache__", ".venv"}
 WATCH_IGNORE_SUFFIXES = (".swp", ".swx", ".tmp", "~", ".pyc")
 
@@ -575,12 +596,8 @@ class LazyTwisterApp(App):
             icon, style = self._icon(status)
             text.append(f"{icon} ", style=style)
             text.append(f"{ref.path.name}/", style="bold")
-            passed = statuses.count("passed")
-            bad = sum(statuses.count(s) for s in ("failed", "error", "blocked"))
-            counts = f"  {passed}/{len(names)}"
-            text.append(counts, style="bright_black")
-            if bad:
-                text.append(f" ✘{bad}", style="red")
+            text.append("  ")
+            text.append_text(count_text(statuses))
         elif ref.kind == "scenario":
             assert ref.scenario is not None
             icon, style = self._icon(self.status_of(ref.scenario))
@@ -647,8 +664,6 @@ class LazyTwisterApp(App):
         """The one-line status bar at the bottom; `2` shows the full status."""
         names = [s.name for s in self.discovery.scenarios]
         statuses = [self.store.scenario_status(n) for n in names]
-        passed = statuses.count("passed")
-        failed = sum(statuses.count(s) for s in ("failed", "error", "blocked"))
         topdir = self.config.workspace.topdir
         sep = (" · ", "bright_black")
         text = Text(no_wrap=True, overflow="ellipsis")
@@ -665,8 +680,7 @@ class LazyTwisterApp(App):
             text.append("auto-run", style="yellow")
         text.append(*sep)
         text.append(f"{len(names)} scenarios ")
-        text.append(f"✔{passed} ", style="green")
-        text.append(f"✘{failed}", style="red" if failed else "bright_black")
+        text.append_text(count_text(statuses))
         if self.discovery.errors:
             text.append(*sep)
             text.append(f"{len(self.discovery.errors)} yaml errors", style="bold red")
@@ -696,9 +710,7 @@ class LazyTwisterApp(App):
             f", {len(self.jobs.queued())} queued")
         cases = sum(len(s.cases) for s in self.discovery.scenarios)
         summary = Text(f"{len(names)} scenarios, {cases} cases  ")
-        summary.append(f"✔{statuses.count('passed')} ", style="green")
-        failed = sum(statuses.count(s) for s in ("failed", "error", "blocked"))
-        summary.append(f"✘{failed}", style="red" if failed else "bright_black")
+        summary.append_text(count_text(statuses))
         row("tests", summary)
         if self.discovery.errors:
             row("yaml errors", Text(str(len(self.discovery.errors)), style="bold red"))

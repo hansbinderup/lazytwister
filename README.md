@@ -4,23 +4,25 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
 
 ```
 ┌[1] Tests ───────────────────────────────┐┌[3] Jobs ─────────────────────────────┐
-│ ▾ ✘ tests/  1/12 ✘1                     ││ ⠹ #3 lib/                 4/7  12s   │
-│   ▾ ✘ drivers/  0/3 ✘1                  ││ … #4 drivers.beta         queued 1   │
+│ ▾ ✘ tests/  1/1/10                      ││ ⠹ #3 lib/                 4/7  12s   │
+│   ▾ ✘ drivers/  0/1/2                   ││ … #4 drivers.beta         queued 1   │
 │     ▸ ✘ drivers.gpio.2pin               ││ ✔ #1 libraries.encoding.json     8s  │
-│   ▾ ✔ lib/  1/7                         │├[4] Output ───────────────────────────┤
+│   ▾ ✔ lib/  1/0/6                       │├[4] Output ───────────────────────────┤
 │     ▾ ✔ libraries.encoding.json         ││ $ west twister -T … -s … -G -i -v …  │
 │         ✔ lib_json_test.json_encoding   ││ INFO - 1/1 native_sim/native/64 …    │
-│   ▸ · subsys/  0/2                      │├[5] Details ──────────────────────────┤
+│   ▸ · subsys/  0/0/2                    │├[5] Details ──────────────────────────┤
 │                                         ││ scenario  libraries.encoding.json    │
 │                                         ││ last results / failing cases / log   │
 └─────────────────────────────────────────┘└──────────────────────────────────────┘
- zephyrproject · tests · default platforms · -G · 12 scenarios ✔1 ✘1
+ zephyrproject · tests · default platforms · -G · 12 scenarios 1/1/10
 ```
 
 ## Features
 
 - **Discovery**: finds every `testcase.yaml` / `sample.yaml` scenario under the test
   roots and every `ZTEST*()` case in their sources, shown as a folder → scenario → case tree.
+  Folders show `passed/failed/not run` counts in green/red/blue; "not run" covers
+  skipped, filtered, build-only, queued and never-run scenarios.
 - **Live reload**: the tree updates as soon as tests are added, removed or changed
   (via `watchfiles`). Keep it open next to your editor.
 - **Run anything**: a folder (`twister -T`), one scenario (`-s`), or a single ztest case
