@@ -23,6 +23,10 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
   roots and every `ZTEST*()` case in their sources, shown as a folder → scenario → case tree.
   Folders show `passed/failed/not run` counts in green/red/blue; "not run" covers
   skipped, filtered, build-only, queued and never-run scenarios.
+- **Choose the test folders**: the first time you start lazytwister in a directory, a
+  folder browser opens so you can pick which folders to look for tests in. Each folder
+  shows how many `testcase.yaml` / `sample.yaml` files it holds. The choice is
+  remembered for that directory; press `O` to change it from inside the app.
 - **Live reload**: the tree updates as soon as tests are added, removed or changed
   (via `watchfiles`). Keep it open next to your editor.
 - **Run anything**: a folder (`twister -T`), one scenario (`-s`), or a single ztest case
@@ -71,11 +75,27 @@ SDK are on `PATH`:
 
 ```sh
 cd ~/zephyrproject && nix develop
-~/repos/lazytwister/.venv/bin/lazytwister                # defaults to ./tests
+~/repos/lazytwister/.venv/bin/lazytwister                # first time: asks which folders to use
 lazytwister -T tests/lib -p native_sim/native/64 -j 8 -w lib -- --coverage
 ```
 
 Arguments after `--` are passed to every twister invocation.
+
+### Test folders
+
+The test roots come from the first of these that is set:
+
+1. `-T` on the command line
+2. `roots` in `.lazytwister.toml`
+3. the folders chosen in the folder browser for this directory
+
+If none is set (the first start in a directory), the folder browser opens, with
+`./tests` preselected if it exists. `esc` there uses that default for now and asks
+again next time. `--pick-folders` opens the browser on start anyway.
+
+In the browser, `space` selects a folder (everything under it is included), `enter`
+applies and `esc` cancels. `[✔]` is a chosen folder, `[·]` is inside one, `[-]` contains
+one. The choice is saved in the state dir (`folders.json`), not in your repo.
 
 ### Per-workspace config
 
@@ -127,6 +147,7 @@ Its Python dependencies must also be installed in west's environment.
 | `r` | queue the marked nodes as one job |
 | `a` / `F` / `.` | queue all / queue failed / repeat the last run |
 | `p` / `g` | choose platforms / toggle integration mode `-G` |
+| `O` | choose the test folders (folder browser) |
 | `w` | toggle auto-run on file change |
 | `/` / `f` | filter / show failed only |
 | `e` | open `$EDITOR` at the failing assert, else at the test source or yaml |

@@ -7,7 +7,7 @@ import shlex
 import shutil
 from pathlib import Path
 
-from . import cache
+from . import cache, folders
 from .config import CONFIG_NAME, ConfigError, FileConfig, find_config, load_config
 from .discovery import default_roots, find_workspace
 from .jobs import RunOptions
@@ -39,7 +39,10 @@ def build_parser(prog: str = "lazytwister") -> argparse.ArgumentParser:
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-T", "--testsuite-root", action="append", type=Path, default=[],
-                        help="test root to discover/run (repeatable; default: ./tests or .)")
+                        help="test root to discover/run (repeatable; default: the folders "
+                             "chosen in the folder browser, which opens the first time)")
+    parser.add_argument("--pick-folders", action="store_true",
+                        help="open the folder browser on start to choose the test roots")
     parser.add_argument("-p", "--platform", action="append", default=[],
                         help="twister platform (repeatable; default: twister's defaults)")
     parser.add_argument("--no-integration", action="store_true", default=None,
@@ -91,9 +94,18 @@ def config_from_args(args: argparse.Namespace, extra: list[str]):
             file_value if file_value is not None else default
         )
 
-    roots = (
-        [r.resolve() for r in args.testsuite_root] or file_config.roots or default_roots(cwd)
-    )
+    state_dir = (args.state_dir or default_state_dir(workspace.topdir or cwd)).resolve()
+    saved = folders.load_saved(state_dir, cwd)
+    if args.testsuite_root:
+        roots, source = [r.resolve() for r in args.testsuite_root], "cli"
+    elif file_config.roots:
+        roots, source = file_config.roots, "config"
+    elif saved:
+        roots, source = saved, "saved"
+    else:
+        roots, source = default_roots(cwd), "default"
+    # First time in this directory (and nothing else says where tests are): ask.
+    pick_folders = args.pick_folders or source == "default"
     missing = [r for r in roots if not r.is_dir()]
     if missing:
         raise SystemExit(f"lazytwister: test root does not exist: {missing[0]}")
@@ -108,7 +120,7 @@ def config_from_args(args: argparse.Namespace, extra: list[str]):
         roots=roots,
         workspace=workspace,
         twister_cmd=twister,
-        state_dir=(args.state_dir or default_state_dir(workspace.topdir or cwd)).resolve(),
+        state_dir=state_dir,
         options=RunOptions(
             platforms=args.platform or file_config.platforms,
             integration=pick(None if args.no_integration is None else False,
@@ -120,6 +132,8 @@ def config_from_args(args: argparse.Namespace, extra: list[str]):
         watch_paths=[w.resolve() for w in args.watch] or file_config.watch,
         auto_run=pick(args.auto_run, file_config.auto_run, False),
         config_file=file_config.path,
+        roots_source=source,
+        pick_folders=pick_folders,
     )
 
 

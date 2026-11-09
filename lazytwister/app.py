@@ -20,8 +20,8 @@ from textual.widgets import Footer, Input, OptionList, RichLog, SelectionList, S
 from textual.widgets.option_list import Option
 from textual.widgets.tree import TreeNode
 
-from . import cache
-from .discovery import Discovery, Scenario, Workspace, discover
+from . import cache, folders
+from .discovery import Discovery, Scenario, Workspace, default_roots, discover
 from .jobs import Job, JobManager, NodeRef, RunOptions, RunTarget, make_target
 from .results import ResultStore, worst
 
@@ -81,6 +81,10 @@ class AppConfig:
     watch_paths: list[Path] = field(default_factory=list)
     auto_run: bool = False
     config_file: Path | None = None
+    # Where the roots came from: "cli", "config", "saved" or "default".
+    roots_source: str = "default"
+    # Open the folder browser on start (first run in this directory).
+    pick_folders: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -178,6 +182,186 @@ class PlatformScreen(ModalScreen[list[str] | None]):
         self.dismiss(list(dict.fromkeys(chosen)))
 
 
+class FolderTree(Tree[Path]):
+    BINDINGS = [
+        Binding("space", "screen.toggle", "Select"),
+        Binding("j", "cursor_down", show=False),
+        Binding("k", "cursor_up", show=False),
+        Binding("l,right", "expand", show=False),
+        Binding("h,left", "collapse", show=False),
+    ]
+
+    action_expand = TestTree.action_expand
+    action_collapse = TestTree.action_collapse
+
+
+class FolderScreen(ModalScreen[list[Path] | None]):
+    """Browse the directories under `base` and choose the test roots."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_none", "Cancel"),
+        Binding("enter,ctrl+s", "apply", "Apply", priority=True),
+    ]
+
+    def __init__(self, base: Path, selected: list[Path], first_run: bool = False):
+        super().__init__()
+        self.base = base.resolve()
+        self.selected: set[Path] = set(folders.normalize(selected))
+        self.first_run = first_run
+        self.counts: dict[Path, int] = {}
+        self.counting: set[Path] = set()
+        self.nodes: dict[Path, TreeNode[Path]] = {}
+        self.loaded: set[Path] = set()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="folder-dialog", classes="panel") as dialog:
+            dialog.border_title = "Test folders"
+            dialog.border_subtitle = "space: select · enter: apply · esc: cancel"
+            intro = (
+                "First time here: choose the folders to look for tests in. "
+                if self.first_run else ""
+            )
+            yield Static(intro + "The choice is remembered for this directory.",
+                         id="folder-intro")
+            tree = FolderTree(f"{self.base.name or self.base}/", data=self.base, id="folder-tree")
+            tree.guide_depth = 3
+            tree.auto_expand = False
+            yield tree
+            yield Static(id="folder-summary")
+
+    @property
+    def tree(self) -> FolderTree:
+        return self.query_one(FolderTree)
+
+    def on_mount(self) -> None:
+        tree = self.tree
+        self.nodes[self.base] = tree.root
+        self._load(tree.root)
+        tree.root.expand()
+        # Reveal the current selection.
+        for path in self.selected:
+            if self.base in path.parents:
+                for ancestor in reversed(path.parents):
+                    if ancestor == self.base or self.base in ancestor.parents:
+                        node = self.nodes.get(ancestor)
+                        if node is not None:
+                            self._load(node)
+                            node.expand()
+        self._count(self.base)
+        self.refresh_labels()
+        first = next(iter(sorted(self.selected)), None)
+        if first in self.nodes:
+            tree.move_cursor(self.nodes[first])
+        tree.focus()
+
+    def _load(self, node: TreeNode[Path]) -> None:
+        path = node.data
+        if path is None or path in self.loaded:
+            return
+        self.loaded.add(path)
+        for child in folders.list_dirs(path):
+            has_children = bool(folders.list_dirs(child))
+            self.nodes[child] = node.add(self.label_for(child), data=child,
+                                         allow_expand=has_children)
+            if child not in self.counts:
+                self._count(child)
+
+    @on(Tree.NodeExpanded, "#folder-tree")
+    def _expanded(self, event: Tree.NodeExpanded) -> None:
+        self._load(event.node)
+        self.refresh_labels()
+
+    def _count(self, top: Path) -> None:
+        if top not in self.counting:
+            self.counting.add(top)
+            self._count_worker(top)
+
+    @work(thread=True, group="count")
+    def _count_worker(self, top: Path) -> None:
+        counts = folders.count_tests(top)
+        try:
+            self.app.call_from_thread(self._counted, counts)
+        except RuntimeError:  # app already gone
+            pass
+
+    def _counted(self, counts: dict[Path, int]) -> None:
+        for path, count in counts.items():
+            self.counts.setdefault(path, count)
+        if self.is_mounted:
+            self.refresh_labels()
+
+    def _state(self, path: Path) -> str:
+        if path in self.selected:
+            return "selected"
+        if any(s in path.parents for s in self.selected):
+            return "inside"
+        if any(path in s.parents for s in self.selected):
+            return "partial"
+        return ""
+
+    def label_for(self, path: Path) -> Text:
+        text = Text()
+        state = self._state(path)
+        if state == "selected":
+            text.append("[✔] ", style="bold green")
+        elif state == "inside":
+            text.append("[·] ", style="green")
+        elif state == "partial":
+            text.append("[-] ", style="yellow")
+        else:
+            text.append("[ ] ", style="bright_black")
+        name = "./" if path == self.base else f"{path.name}/"
+        count = self.counts.get(path)
+        text.append(name, style="bold" if count else ("" if count is None else "bright_black"))
+        if count is None:
+            text.append("  …", style="bright_black")
+        elif count:
+            text.append(f"  {count} test file{'s' if count != 1 else ''}", style="cyan")
+        return text
+
+    def refresh_labels(self) -> None:
+        for path, node in self.nodes.items():
+            node.set_label(self.label_for(path))
+        summary = Text()
+        chosen = sorted(self.selected)
+        if not chosen:
+            summary.append("Nothing selected.", style="yellow")
+        else:
+            summary.append("Selected: ", style="bold")
+            summary.append(", ".join(self._rel(p) for p in chosen))
+        self.query_one("#folder-summary", Static).update(summary)
+
+    def _rel(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.base)) or "."
+        except ValueError:
+            return str(path)
+
+    def action_toggle(self) -> None:
+        node = self.tree.cursor_node
+        if node is None or node.data is None:
+            return
+        path = node.data
+        if path in self.selected:
+            self.selected.discard(path)
+        else:
+            # Selecting a folder replaces any selection inside it or around it.
+            self.selected = {
+                s for s in self.selected if path not in s.parents and s not in path.parents
+            }
+            self.selected.add(path)
+        self.refresh_labels()
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+    def action_apply(self) -> None:
+        if not self.selected:
+            self.notify("select at least one folder (space)", severity="warning", timeout=3)
+            return
+        self.dismiss(folders.normalize(list(self.selected)))
+
+
 HELP_TEXT = """\
 [b]Panels[/]   1 tests · 3 jobs · 4 output · 5 details · tab cycles
            2 full status (the bar at the bottom is the short version)
@@ -188,6 +372,7 @@ HELP_TEXT = """\
   r          queue marked nodes as ONE job (one twister invocation)
   c          clear marks
   e          open testcase.yaml / test source in $EDITOR
+  O          choose test folders (file browser)
   h/l j/k    navigate, collapse / expand
   /          filter        f   only failed
 
@@ -320,14 +505,17 @@ class LazyTwisterApp(App):
     #jobs { height: 9; }
     #log { height: 1fr; }
     #details-panel { height: 40%; padding: 0 1; }
-    #platform-dialog, #help-dialog, #info-dialog, #confirm-dialog, #cache-dialog {
+    #platform-dialog, #help-dialog, #info-dialog, #confirm-dialog, #cache-dialog,
+    #folder-dialog {
         width: 90; max-width: 95%; height: auto; max-height: 90%;
         padding: 1 2; background: $surface;
     }
-    PlatformScreen, HelpScreen, InfoScreen, ConfirmScreen, CacheScreen {
+    PlatformScreen, HelpScreen, InfoScreen, ConfirmScreen, CacheScreen, FolderScreen {
         align: center middle;
     }
     #confirm-dialog { width: 60; }
+    #folder-dialog { height: 90%; }
+    #folder-tree { height: 1fr; margin: 1 0; background: $surface; }
 
     /* Portrait: stack the two columns. */
     Screen.-portrait #main { layout: vertical; }
@@ -352,6 +540,7 @@ class LazyTwisterApp(App):
         Binding("F", "rerun_failed", "Queue failed"),
         Binding("full_stop", "repeat_last", "Repeat"),
         Binding("p", "platforms", "Platform"),
+        Binding("O", "choose_folders", "Folders"),
         Binding("g", "toggle_integration", "-G", show=False),
         Binding("w", "toggle_autorun", "Auto-run"),
         Binding("slash", "filter", "Filter"),
@@ -435,8 +624,47 @@ class LazyTwisterApp(App):
         self.tree.focus()
         self.update_status()
         self.set_interval(0.15, self._tick)
+        if self.config.pick_folders:
+            self.push_screen(
+                FolderScreen(self.config.cwd, self.config.roots, first_run=True),
+                self._first_folders_chosen,
+            )
+            return
         await self.rediscover()
         self.watch_files()
+
+    async def _first_folders_chosen(self, roots: list[Path] | None) -> None:
+        if roots is None:
+            # Cancelled: use the defaults for now and ask again next time.
+            self.config.roots = self.config.roots or default_roots(self.config.cwd)
+        else:
+            self._set_roots(roots)
+        await self.rediscover()
+        self.watch_files()
+
+    def _set_roots(self, roots: list[Path]) -> None:
+        self.config.roots = roots
+        try:
+            folders.save(self.config.state_dir, self.config.cwd, roots)
+        except OSError as exc:
+            self.notify(f"could not save folder selection: {exc}", severity="error")
+        if self.config.roots_source in ("cli", "config"):
+            where = "-T" if self.config.roots_source == "cli" else "roots in the config file"
+            self.notify(f"saved, but {where} take precedence on the next start",
+                        severity="warning", timeout=6)
+        self.config.roots_source = "saved"
+
+    def action_choose_folders(self) -> None:
+        async def chosen(roots: list[Path] | None) -> None:
+            if roots is None or roots == self.config.roots:
+                return
+            self._set_roots(roots)
+            await self.rediscover()
+            self.watch_files()  # exclusive worker: restarts on the new roots
+            self.notify(f"{len(self.discovery.scenarios)} scenarios in "
+                        f"{len(roots)} folder{'s' if len(roots) != 1 else ''}", timeout=3)
+
+        self.push_screen(FolderScreen(self.config.cwd, self.config.roots), chosen)
 
     # -- adaptive layout ------------------------------------------------------
 
@@ -700,7 +928,8 @@ class LazyTwisterApp(App):
             text.append("\n")
 
         row("workspace", cfg.workspace.topdir or "(not in a west workspace)")
-        row("roots", ", ".join(self._rel(r) for r in cfg.roots))
+        row("roots", f"{', '.join(self._rel(r) for r in cfg.roots)}  "
+            f"({cfg.roots_source}; O to change)")
         row("config", cfg.config_file or "none (.lazytwister.toml)")
         row("platforms", ", ".join(self.options.platforms) or "twister default")
         row("integration", on if self.options.integration else off)
