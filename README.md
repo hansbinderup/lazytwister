@@ -66,18 +66,64 @@ auto-run and the pass/fail totals. `2` opens the full status as a pop-up.
 
 ## Install
 
+### With Nix
+
+The repo is a flake (needs flakes enabled: `experimental-features = nix-command flakes`).
+Replace `<owner>` with the GitHub user or organisation hosting the repo.
+
+Try it without installing:
+
 ```sh
-uv venv .venv && uv pip install -e '.[dev]'   # or: nix develop / nix build
+nix run github:<owner>/lazytwister
 ```
 
-Then start it **from inside the workspace's dev shell**, so that `west` and the Zephyr
+Install it into your profile, and upgrade later:
+
+```sh
+nix profile install github:<owner>/lazytwister   # Nix >= 2.27 also accepts: nix profile add
+nix profile upgrade lazytwister
+```
+
+From a local checkout, use `.` (or the path to it) instead of `github:<owner>/lazytwister`.
+Nix only sees files tracked by git, so `git add` new files before building.
+
+On NixOS or with home-manager, add it as a flake input:
+
+```nix
+# flake.nix
+inputs.lazytwister.url = "github:<owner>/lazytwister";
+
+# configuration.nix (NixOS)             or home.nix (home-manager)
+environment.systemPackages = [          # home.packages = [
+  inputs.lazytwister.packages.${pkgs.stdenv.hostPlatform.system}.default
+];
+```
+
+Pass `inputs` to your modules with `specialArgs` (NixOS) or `extraSpecialArgs` (home-manager).
+To pin a branch, tag or commit: `github:<owner>/lazytwister/<ref>`.
+
+Inside a workspace that has its own flake, you can also add lazytwister to that flake's dev
+shell (`packages = [ inputs.lazytwister.packages.${system}.default ];`), so it's on `PATH`
+together with `west` and the SDK.
+
+### With pip / uv
+
+```sh
+uv venv .venv && uv pip install -e '.[dev]'
+```
+
+### Running
+
+Start it **from inside the workspace's dev shell**, so that `west` and the Zephyr
 SDK are on `PATH`:
 
 ```sh
 cd ~/zephyrproject && nix develop
-~/repos/lazytwister/.venv/bin/lazytwister                # first time: asks which folders to use
+lazytwister                # first time: asks which folders to use
 lazytwister -T tests/lib -p native_sim/native/64 -j 8 -w lib -- --coverage
 ```
+
+(With the uv install, run `~/repos/lazytwister/.venv/bin/lazytwister`.)
 
 Arguments after `--` are passed to every twister invocation.
 
@@ -183,6 +229,9 @@ and never follows symlinks.
 
 ```sh
 .venv/bin/pytest
+# or with Nix:
+nix develop -c python -m pytest   # dev shell with Python, the dependencies and pytest
+nix build                       # builds the package and runs the tests; result in ./result
 ```
 
 The tests use `tests/fake_twister.py` in place of twister, so they run without Zephyr.

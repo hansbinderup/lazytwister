@@ -19,6 +19,10 @@
           nativeCheckInputs = with pkgs.python3Packages; [ pytestCheckHook pytest-asyncio ];
           # Relies on live filesystem watching, which is unreliable in the Nix build sandbox.
           disabledTests = [ "test_new_testcase_is_picked_up_live" ];
+          meta = {
+            description = "lazygit-style TUI for Zephyr twister tests in west workspaces";
+            mainProgram = "lazytwister";
+          };
         };
         default = lazytwister;
       });
