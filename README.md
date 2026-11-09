@@ -69,32 +69,74 @@ auto-run and the pass/fail totals. `2` opens the full status as a pop-up.
 
 ## Install
 
+### Install script (any Linux)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/hansbinderup/lazytwister/main/install.sh | bash
+```
+
+This needs Python 3.11 or newer with the `venv` module (on Debian/Ubuntu:
+`sudo apt install python3-venv`). No root is needed. The script:
+
+- creates a virtualenv in `~/.local/share/lazytwister` and installs lazytwister and its
+  dependencies (textual, watchfiles, PyYAML) from PyPI into it
+- links the `lazytwister` command into `~/.local/bin` (and tells you if that isn't on
+  your `PATH`)
+
+Run it again to update; if an update fails, the current install is left as it was. To install a branch, tag or commit, set `LAZYTWISTER_REF`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/hansbinderup/lazytwister/main/install.sh | LAZYTWISTER_REF=v0.1.0 bash
+```
+
+Other overrides: `PYTHON` (interpreter to use), `LAZYTWISTER_HOME` (install directory) and
+`LAZYTWISTER_BIN_DIR` (where the command is linked).
+
+While the repo is private, `curl` can't download from it. Clone it and run the script
+from the clone instead; it then installs from the clone:
+
+```sh
+git clone git@github.com:hansbinderup/lazytwister.git && ./lazytwister/install.sh
+```
+
+To uninstall:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/hansbinderup/lazytwister/main/uninstall.sh | bash
+# or from a clone: ./uninstall.sh
+```
+
+This removes the virtualenv and the `~/.local/bin/lazytwister` link. Your test results,
+twister build output and remembered test folders in `~/.cache/lazytwister` are kept; add
+`--purge` to remove them too (`… | bash -s -- --purge`, or `./uninstall.sh --purge`).
+
 ### With Nix
 
 The repo is a flake (needs flakes enabled: `experimental-features = nix-command flakes`).
-Replace `<owner>` with the GitHub user or organisation hosting the repo.
+While the repo is private, Nix needs a GitHub token to fetch it: add
+`access-tokens = github.com=<token>` to `~/.config/nix/nix.conf`, or use a clone (`.`).
 
 Try it without installing:
 
 ```sh
-nix run github:<owner>/lazytwister
+nix run github:hansbinderup/lazytwister
 ```
 
 Install it into your profile, and upgrade later:
 
 ```sh
-nix profile install github:<owner>/lazytwister   # Nix >= 2.27 also accepts: nix profile add
+nix profile install github:hansbinderup/lazytwister   # Nix >= 2.27 also accepts: nix profile add
 nix profile upgrade lazytwister
 ```
 
-From a local checkout, use `.` (or the path to it) instead of `github:<owner>/lazytwister`.
+From a local checkout, use `.` (or the path to it) instead of `github:hansbinderup/lazytwister`.
 Nix only sees files tracked by git, so `git add` new files before building.
 
 On NixOS or with home-manager, add it as a flake input:
 
 ```nix
 # flake.nix
-inputs.lazytwister.url = "github:<owner>/lazytwister";
+inputs.lazytwister.url = "github:hansbinderup/lazytwister";
 
 # configuration.nix (NixOS)             or home.nix (home-manager)
 environment.systemPackages = [          # home.packages = [
@@ -103,7 +145,7 @@ environment.systemPackages = [          # home.packages = [
 ```
 
 Pass `inputs` to your modules with `specialArgs` (NixOS) or `extraSpecialArgs` (home-manager).
-To pin a branch, tag or commit: `github:<owner>/lazytwister/<ref>`.
+To pin a branch, tag or commit: `github:hansbinderup/lazytwister/<ref>`.
 
 Inside a workspace that has its own flake, you can also add lazytwister to that flake's dev
 shell (`packages = [ inputs.lazytwister.packages.${system}.default ];`), so it's on `PATH`
