@@ -17,6 +17,20 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
  zephyrproject · tests · default platforms · -G · 12 scenarios 1/1/10
 ```
 
+## About
+
+> **Disclaimer:** lazytwister is a side project, built mainly to find out what I can make
+> with [Claude Code](https://claude.com/claude-code). Nearly all of the code was written by
+> Claude, with me steering, testing and deciding what to build. It works well for me, but
+> treat it as an experiment rather than a polished, supported tool.
+
+I use [lazygit](https://github.com/jesseduffield/lazygit) every day and love how it turns
+a command line tool into something you can see and drive with a few keys. Running Zephyr
+tests with twister is the opposite: long command lines, scrolling through output to find
+what failed, and re-typing `-s`/`-T` arguments to rerun one test. So I wanted the same
+kind of tool for twister: see all the tests at a glance, queue them with a keypress, keep
+the results around, and jump straight to the assert that failed.
+
 ## Features
 
 - **Discovery**: finds every `testcase.yaml` / `sample.yaml` scenario under the test
