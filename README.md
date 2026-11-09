@@ -106,11 +106,10 @@ curl -fsSL https://raw.githubusercontent.com/hansbinderup/lazytwister/main/insta
 Other overrides: `PYTHON` (interpreter to use), `LAZYTWISTER_HOME` (install directory) and
 `LAZYTWISTER_BIN_DIR` (where the command is linked).
 
-While the repo is private, `curl` can't download from it. Clone it and run the script
-from the clone instead; it then installs from the clone:
+Or run it from a clone, which installs from the clone (handy for local changes):
 
 ```sh
-git clone git@github.com:hansbinderup/lazytwister.git && ./lazytwister/install.sh
+git clone https://github.com/hansbinderup/lazytwister.git && ./lazytwister/install.sh
 ```
 
 To uninstall:
@@ -120,15 +119,14 @@ curl -fsSL https://raw.githubusercontent.com/hansbinderup/lazytwister/main/unins
 # or from a clone: ./uninstall.sh
 ```
 
-This removes the virtualenv and the `~/.local/bin/lazytwister` link. Your test results,
+This removes the virtualenv and the `~/.local/bin/lazytwister` link (only if it points
+at that virtualenv). Your test results,
 twister build output and remembered test folders in `~/.cache/lazytwister` are kept; add
 `--purge` to remove them too (`… | bash -s -- --purge`, or `./uninstall.sh --purge`).
 
 ### With Nix
 
 The repo is a flake (needs flakes enabled: `experimental-features = nix-command flakes`).
-While the repo is private, Nix needs a GitHub token to fetch it: add
-`access-tokens = github.com=<token>` to `~/.config/nix/nix.conf`, or use a clone (`.`).
 
 Try it without installing:
 
