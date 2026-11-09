@@ -65,6 +65,9 @@ async def test_marked_nodes_queue_as_one_job_and_enter_queues_more(
         await pilot.press("3")
         order = app.job_order()
         assert order[0] is app.jobs.current
+        # As a real highlight does (via OptionHighlighted); otherwise a refresh tick
+        # in between restores the highlight to the job whose output is shown.
+        app.viewed_job = order[2].id
         app.query_one("#jobs").highlighted = 2
         await pilot.press("x")
         assert order[2].state == "cancelled" and len(app.jobs.queued()) == 1
@@ -89,6 +92,7 @@ async def test_new_testcase_is_picked_up_live(test_tree, tmp_path, fake_twister)
     app = make_app(test_tree, tmp_path, fake_twister)
     async with app.run_test(size=(160, 50)):
         await wait_for(lambda: "s:drivers.beta" in app.node_index)
+        await wait_for(lambda: app.watching)  # the watcher runs in a child process
         new = test_tree / "subsys" / "gamma" / "testcase.yaml"
         new.parent.mkdir(parents=True)
         new.write_text("tests:\n  subsys.gamma: {}\n")
@@ -286,3 +290,4 @@ async def test_big_tree_opens_only_roots_and_builds_children_on_expand(
         assert "s:g0.t0" in app.node_index and "s:g1.t0" not in app.node_index
         await pilot.press("slash", *"g2.t1")
         await wait_for(lambda: "s:g2.t1" in app.node_index)
+

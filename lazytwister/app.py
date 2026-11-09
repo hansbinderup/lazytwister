@@ -24,6 +24,7 @@ from . import cache, folders
 from .discovery import Discovery, Scenario, Workspace, default_roots, discover
 from .jobs import Job, JobManager, NodeRef, RunOptions, RunTarget, make_target
 from .results import ResultStore, worst
+from .watcher import WatchError, watch_changes
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 STATUS_ICON = {
@@ -66,8 +67,6 @@ def count_text(statuses: list[str | None]) -> Text:
     return text
 
 
-WATCH_IGNORE_PARTS = {".git", ".lazytwister", "build", "__pycache__", ".venv"}
-WATCH_IGNORE_SUFFIXES = (".swp", ".swx", ".tmp", "~", ".pyc")
 
 
 @dataclass
@@ -589,6 +588,7 @@ class LazyTwisterApp(App):
         self._open_now: set[str] = set()
         self.loading_tests = False
         self._filter_timer = None
+        self.watching = False  # file watcher is up
         self._dirty = False
         self._spin = 0
         self._followed_job: int | None = None
@@ -776,21 +776,32 @@ class LazyTwisterApp(App):
         known_folders: set[Path] = set()
         placed: set[str] = set()
         shown = 0
+        # Walk up the folders once per test directory, not once per scenario.
+        by_dir: dict[Path, list[Scenario]] = defaultdict(list)
+        for scenario in self.discovery.scenarios:
+            by_dir[scenario.directory].append(scenario)
         for root in self.discovery.roots:
             known_folders.add(root)
-            for scenario in self.discovery.scenarios:
-                if scenario.name in placed:
+            root_str = str(root)
+            prefix = root_str.rstrip(os.sep) + os.sep
+            for directory, scenarios in by_dir.items():
+                dir_str = str(directory)
+                if dir_str != root_str and not dir_str.startswith(prefix):
                     continue
-                if not (scenario.directory == root or root in scenario.directory.parents):
+                names = []
+                for scenario in scenarios:
+                    if scenario.name in placed:
+                        continue
+                    placed.add(scenario.name)
+                    if self._matches(scenario):
+                        names.append(scenario.name)
+                        self.folder_items[directory].append(scenario)
+                if not names:
                     continue
-                placed.add(scenario.name)
-                if not self._matches(scenario):
-                    continue
-                shown += 1
-                self.folder_items[scenario.directory].append(scenario)
-                path = scenario.directory
+                shown += len(names)
+                path = directory
                 while True:
-                    self.folder_scenarios[f"d:{path}"].append(scenario.name)
+                    self.folder_scenarios[f"d:{path}"].extend(names)
                     if path not in known_folders:
                         known_folders.add(path)
                         self.folder_children[path.parent].append(path)
@@ -953,6 +964,8 @@ class LazyTwisterApp(App):
         self.live = live
 
     def _tick(self) -> None:
+        if not self.is_running:  # shutting down: the widgets may be gone
+            return
         self._spin += 1
         if self._dirty:
             self._dirty = False
@@ -1549,28 +1562,25 @@ class LazyTwisterApp(App):
 
     # -- file watching ------------------------------------------------------------
 
-    @staticmethod
-    def _watch_filter(_change, path: str) -> bool:
-        parts = Path(path).parts
-        if any(p in WATCH_IGNORE_PARTS or p.startswith("twister-out") for p in parts):
-            return False
-        return not path.endswith(WATCH_IGNORE_SUFFIXES)
-
     @work(exclusive=True, group="watch")
     async def watch_files(self) -> None:
-        try:
-            from watchfiles import awatch
-        except ImportError:
-            self.notify("watchfiles not installed — live reload disabled", severity="warning")
-            return
+        """Rediscover (and auto-run) on changes. Restarting the worker (it's
+        exclusive) stops the previous watcher."""
+        self.watching = False
         paths = [p for p in [*self.config.roots, *self.config.watch_paths] if p.exists()]
         if not paths:
             return
-        async for changes in awatch(*paths, watch_filter=self._watch_filter, debounce=600):
-            changed = [Path(p) for _, p in changes]
-            await self.rediscover()
-            if self.auto_run:
-                self._auto_run(changed)
+
+        def ready() -> None:
+            self.watching = True
+
+        try:
+            async for changed in watch_changes(paths, on_ready=ready):
+                await self.rediscover()
+                if self.auto_run:
+                    self._auto_run(changed)
+        except (WatchError, OSError) as exc:
+            self.notify(f"live reload disabled: {exc}", severity="warning", timeout=8)
 
     def _auto_run(self, changed: list[Path]) -> None:
         affected = [
