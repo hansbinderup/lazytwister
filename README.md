@@ -2,20 +2,10 @@
 
 A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** workspace.
 
-```
-┌[1] Tests ───────────────────────────────┐┌[3] Jobs ─────────────────────────────┐
-│ ▾ ✘ tests/  1/1/10                      ││ ⠹ #3 lib/                 4/7  12s   │
-│   ▾ ✘ drivers/  0/1/2                   ││ … #4 drivers.beta         queued 1   │
-│     ▸ ✘ drivers.gpio.2pin               ││ ✔ #1 libraries.encoding.json     8s  │
-│   ▾ ✔ lib/  1/0/6                       │├[4] Output ───────────────────────────┤
-│     ▾ ✔ libraries.encoding.json         ││ $ west twister -T … -s … -G -i -v …  │
-│         ✔ lib_json_test.json_encoding   ││ INFO - 1/1 native_sim/native/64 …    │
-│   ▸ · subsys/  0/0/2                    │├[5] Details ──────────────────────────┤
-│                                         ││ scenario  libraries.encoding.json    │
-│                                         ││ last results / failing cases / log   │
-└─────────────────────────────────────────┘└──────────────────────────────────────┘
- zephyrproject · tests · default platforms · -G · 12 scenarios 1/1/10
-```
+![lazytwister running Zephyr's own tests](docs/lazytwister.gif)
+
+*Picking `zephyr/tests` (2706 scenarios) on first start, then filtering and queueing two
+scenarios on `native_sim/native/64`. Real twister runs; the build time is sped up.*
 
 ## About
 
