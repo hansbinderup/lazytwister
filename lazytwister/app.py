@@ -581,6 +581,14 @@ class LazyTwisterApp(App):
         self.viewed_job: int | None = None
         self.last_target: RunTarget | None = None
         self._tree_built = False
+        self.expanded: set[str] | None = None  # open folder/scenario keys
+        self.seen_folders: set[str] = set()
+        self.populated: set[str] = set()
+        self.folder_children: dict[Path, list[Path]] = {}
+        self.folder_items: dict[Path, list[Scenario]] = {}
+        self._open_now: set[str] = set()
+        self.loading_tests = False
+        self._filter_timer = None
         self._dirty = False
         self._spin = 0
         self._followed_job: int | None = None
@@ -630,7 +638,7 @@ class LazyTwisterApp(App):
                 self._first_folders_chosen,
             )
             return
-        await self.rediscover()
+        await self.rediscover(loading=True)
         self.watch_files()
 
     async def _first_folders_chosen(self, roots: list[Path] | None) -> None:
@@ -639,11 +647,12 @@ class LazyTwisterApp(App):
             self.config.roots = self.config.roots or default_roots(self.config.cwd)
         else:
             self._set_roots(roots)
-        await self.rediscover()
+        await self.rediscover(loading=True)
         self.watch_files()
 
     def _set_roots(self, roots: list[Path]) -> None:
         self.config.roots = roots
+        self.expanded = None  # new tree: start from the default open folders
         try:
             folders.save(self.config.state_dir, self.config.cwd, roots)
         except OSError as exc:
@@ -659,7 +668,7 @@ class LazyTwisterApp(App):
             if roots is None or roots == self.config.roots:
                 return
             self._set_roots(roots)
-            await self.rediscover()
+            await self.rediscover(loading=True)
             self.watch_files()  # exclusive worker: restarts on the new roots
             self.notify(f"{len(self.discovery.scenarios)} scenarios in "
                         f"{len(roots)} folder{'s' if len(roots) != 1 else ''}", timeout=3)
@@ -719,8 +728,18 @@ class LazyTwisterApp(App):
 
     # -- discovery & tree ----------------------------------------------------
 
-    async def rediscover(self) -> None:
-        self.discovery = await asyncio.to_thread(discover, self.config.roots)
+    async def rediscover(self, loading: bool = False) -> None:
+        """Rediscover tests. `loading` shows a spinner (first load / new roots);
+        file-change reloads stay quiet."""
+        if loading:
+            self.loading_tests = True
+            self.tree.loading = True
+            self.update_status()
+        try:
+            self.discovery = await asyncio.to_thread(discover, self.config.roots)
+        finally:
+            self.loading_tests = False
+            self.tree.loading = False
         self.rebuild_tree()
         self.update_status()
         self.update_details()
@@ -735,43 +754,30 @@ class LazyTwisterApp(App):
         haystack += [c.id for c in scenario.cases]
         return any(needle in h.lower() for h in haystack)
 
+    # Trees with more scenarios than this open only their roots at first, and
+    # filter results are only expanded up to this many matches.
+    OPEN_ALL_MAX = 300
+
     def rebuild_tree(self) -> None:
+        """Rebuild the tree model, then create nodes for what is visible.
+
+        Children of a folder or scenario are only created when it is expanded,
+        so huge test roots (e.g. zephyr/tests) stay fast.
+        """
         tree = self.tree
-        expanded: set[str] | None = None
         cursor_key = None
-        if self._tree_built:
-            expanded = {k for k, n in self.node_index.items() if n.is_expanded}
-            if tree.cursor_node is not None and tree.cursor_node.data is not None:
-                cursor_key = tree.cursor_node.data.key
+        if tree.cursor_node is not None and tree.cursor_node.data is not None:
+            cursor_key = tree.cursor_node.data.key
 
-        tree.clear()
-        self.node_index = {}
+        # Model: folders -> subfolders / scenarios, from the matching scenarios.
         self.folder_scenarios = defaultdict(list)
-
-        def add(parent: TreeNode, ref: NodeRef, leaf: bool = False) -> TreeNode:
-            if leaf:
-                node = parent.add_leaf(self.label_for(ref), data=ref)
-            else:
-                default = ref.kind == "folder"
-                is_open = default if expanded is None else ref.key in expanded
-                node = parent.add(self.label_for(ref), data=ref, expand=is_open)
-            self.node_index[ref.key] = node
-            return node
-
+        self.folder_children: dict[Path, list[Path]] = defaultdict(list)
+        self.folder_items: dict[Path, list[Scenario]] = defaultdict(list)
+        known_folders: set[Path] = set()
         placed: set[str] = set()
+        shown = 0
         for root in self.discovery.roots:
-            root_ref = NodeRef("folder", root)
-            root_node = add(tree.root, root_ref)
-            root_node.expand()
-            folders = {root: root_node}
-
-            def folder(path: Path) -> TreeNode:
-                if path in folders:
-                    return folders[path]
-                parent = folder(path.parent)
-                folders[path] = add(parent, NodeRef("folder", path))
-                return folders[path]
-
+            known_folders.add(root)
             for scenario in self.discovery.scenarios:
                 if scenario.name in placed:
                     continue
@@ -780,24 +786,99 @@ class LazyTwisterApp(App):
                 placed.add(scenario.name)
                 if not self._matches(scenario):
                     continue
-                parent = folder(scenario.directory)
-                ref = NodeRef("scenario", scenario.directory, scenario.name)
-                node = add(parent, ref, leaf=not scenario.cases)
-                for case in scenario.cases:
-                    add(node, NodeRef("case", scenario.directory, scenario.name, case), leaf=True)
+                shown += 1
+                self.folder_items[scenario.directory].append(scenario)
                 path = scenario.directory
                 while True:
                     self.folder_scenarios[f"d:{path}"].append(scenario.name)
+                    if path not in known_folders:
+                        known_folders.add(path)
+                        self.folder_children[path.parent].append(path)
                     if path == root or path.parent == path:
                         break
                     path = path.parent
+        for children in self.folder_children.values():
+            children.sort(key=lambda p: p.name)
+
+        folder_keys = {f"d:{p}" for p in known_folders}
+        if self.expanded is None:  # first build (or new roots)
+            self.expanded = {f"d:{root}" for root in self.discovery.roots}
+            self.seen_folders = set()
+        if shown <= self.OPEN_ALL_MAX:
+            # Small tree: folders open by default, including ones added since.
+            self.expanded |= folder_keys - self.seen_folders
+        self.seen_folders |= folder_keys
+        self._open_now = set(self.expanded)
+        if (self.filter_text or self.failed_only) and shown <= self.OPEN_ALL_MAX:
+            self._open_now |= {f"d:{p}" for p in known_folders}
+
+        tree.clear()
+        self.node_index = {}
+        self.populated: set[str] = set()
+        for root in self.discovery.roots:
+            self._add_folder(tree.root, root)
 
         # Drop marks for nodes that no longer exist.
-        self.marks = {k: v for k, v in self.marks.items() if k in self.node_index}
+        self.marks = {k: v for k, v in self.marks.items() if self._ref_exists(v)}
+        self._update_mark_subtitle()
         self._tree_built = True
-        self.refresh_labels()
         if cursor_key and cursor_key in self.node_index:
             tree.move_cursor(self.node_index[cursor_key])
+
+    def _ref_exists(self, ref: NodeRef) -> bool:
+        if ref.kind == "folder":
+            return ref.key in self.folder_scenarios
+        scenario = self.discovery.by_name().get(ref.scenario or "")
+        if scenario is None:
+            return False
+        return ref.kind == "scenario" or any(c == ref.case for c in scenario.cases)
+
+    def _add_node(self, parent: TreeNode, ref: NodeRef, expandable: bool) -> TreeNode:
+        if expandable:
+            node = parent.add(self.label_for(ref), data=ref, allow_expand=True)
+        else:
+            node = parent.add_leaf(self.label_for(ref), data=ref)
+        self.node_index[ref.key] = node
+        return node
+
+    def _add_folder(self, parent: TreeNode, path: Path) -> None:
+        ref = NodeRef("folder", path)
+        node = self._add_node(parent, ref, expandable=True)
+        if ref.key in self._open_now:
+            self._populate(node)
+            node.expand()
+
+    def _populate(self, node: TreeNode[NodeRef]) -> None:
+        """Create the children of a folder or scenario node (once)."""
+        ref = node.data
+        if ref is None or ref.key in self.populated:
+            return
+        self.populated.add(ref.key)
+        if ref.kind == "folder":
+            for scenario in self.folder_items.get(ref.path, []):
+                child = NodeRef("scenario", scenario.directory, scenario.name)
+                child_node = self._add_node(node, child, expandable=bool(scenario.cases))
+                if child.key in self._open_now:
+                    self._populate(child_node)
+                    child_node.expand()
+            for sub in self.folder_children.get(ref.path, []):
+                self._add_folder(node, sub)
+        elif ref.kind == "scenario":
+            scenario = self.discovery.by_name().get(ref.scenario or "")
+            for case in scenario.cases if scenario else []:
+                self._add_node(node, NodeRef("case", ref.path, ref.scenario, case),
+                               expandable=False)
+
+    @on(Tree.NodeExpanded, "#tests")
+    def _test_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        self._populate(event.node)
+        if event.node.data is not None:
+            self.expanded.add(event.node.data.key)
+
+    @on(Tree.NodeCollapsed, "#tests")
+    def _test_node_collapsed(self, event: Tree.NodeCollapsed) -> None:
+        if event.node.data is not None:
+            self.expanded.discard(event.node.data.key)
 
     # -- status helpers -----------------------------------------------------
 
@@ -907,8 +988,11 @@ class LazyTwisterApp(App):
             text.append(*sep)
             text.append("auto-run", style="yellow")
         text.append(*sep)
-        text.append(f"{len(names)} scenarios ")
-        text.append_text(count_text(statuses))
+        if self.loading_tests:
+            text.append("loading tests…", style="yellow")
+        else:
+            text.append(f"{len(names)} scenarios ")
+            text.append_text(count_text(statuses))
         if self.discovery.errors:
             text.append(*sep)
             text.append(f"{len(self.discovery.errors)} yaml errors", style="bold red")
@@ -1299,10 +1383,24 @@ class LazyTwisterApp(App):
         box.remove_class("visible")
         self.tree.focus()
 
+    FILTER_DELAY = 0.15  # seconds; rebuild once typing pauses
+
     @on(Input.Changed, "#filter")
     def _filter_changed(self, event: Input.Changed) -> None:
-        self.filter_text = event.value.strip()
-        self.rebuild_tree()
+        if self._filter_timer is not None:
+            self._filter_timer.stop()
+        text = event.value.strip()
+
+        def apply() -> None:
+            self._filter_timer = None
+            if text != self.filter_text:
+                self.filter_text = text
+                self.rebuild_tree()
+
+        if not text:
+            apply()  # clearing (e.g. esc) is instant
+        else:
+            self._filter_timer = self.set_timer(self.FILTER_DELAY, apply)
 
     @on(Input.Submitted, "#filter")
     def _filter_submitted(self, event: Input.Submitted) -> None:
@@ -1318,7 +1416,7 @@ class LazyTwisterApp(App):
         )
 
     async def action_rediscover(self) -> None:
-        await self.rediscover()
+        await self.rediscover(loading=True)
         self.notify(f"{len(self.discovery.scenarios)} scenarios", timeout=2)
 
     def action_focus_panel(self, panel_id: str) -> None:

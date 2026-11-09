@@ -31,7 +31,10 @@ async def test_tree_shows_scenarios_and_runs_one(test_tree, tmp_path, fake_twist
     app = make_app(test_tree, tmp_path, fake_twister)
     async with app.run_test(size=(160, 50)) as pilot:
         await wait_for(lambda: "s:drivers.beta" in app.node_index)
-        assert "c:lib.alpha.default:alpha_suite.adds" in app.node_index
+        # Cases are only created once their scenario is expanded.
+        assert "c:lib.alpha.default:alpha_suite.adds" not in app.node_index
+        app.node_index["s:lib.alpha.default"].expand()
+        await wait_for(lambda: "c:lib.alpha.default:alpha_suite.adds" in app.node_index)
         app.tree.move_cursor(app.node_index["s:drivers.beta"])
         await pilot.press("enter")
         await wait_for(lambda: app.store.scenario_status("drivers.beta") == "passed")
@@ -75,9 +78,8 @@ async def test_filter_narrows_tree(test_tree, tmp_path, fake_twister):
     async with app.run_test(size=(160, 50)) as pilot:
         await wait_for(lambda: "s:drivers.beta" in app.node_index)
         await pilot.press("slash", *"beta")
-        await pilot.pause()
+        await wait_for(lambda: "s:lib.alpha.default" not in app.node_index)
         assert "s:drivers.beta" in app.node_index
-        assert "s:lib.alpha.default" not in app.node_index
         await pilot.press("escape")
         await pilot.pause()
         assert "s:lib.alpha.default" in app.node_index
@@ -215,7 +217,7 @@ async def test_edit_jumps_to_failing_assert(test_tree, tmp_path, fake_twister, m
         assert "src/test.c:1" in details and "1 not equal to 2" in details
 
         app.node_index["s:drivers.beta"].expand()
-        await pilot.pause()
+        await wait_for(lambda: "c:drivers.beta:beta_suite.one" in app.node_index)
         app.tree.move_cursor(app.node_index["c:drivers.beta:beta_suite.one"])
         await pilot.pause()
         assert "failed at" in str(app.query_one("#details").render())
@@ -256,3 +258,31 @@ def test_count_text_splits_passed_failed_and_not_run():
     assert text.plain == "2/2/3"
     number_styles = [span.style for span in text.spans if span.style != "bright_black"]
     assert number_styles == ["green", "red", "blue"]
+
+
+async def test_big_tree_opens_only_roots_and_builds_children_on_expand(
+        tmp_path, fake_twister, monkeypatch):
+    root = tmp_path / "tests"
+    for group in range(4):
+        for n in range(3):
+            directory = root / f"group{group}" / f"t{n}"
+            directory.mkdir(parents=True)
+            (directory / "testcase.yaml").write_text(f"tests:\n  g{group}.t{n}: {{}}\n")
+    monkeypatch.setattr(LazyTwisterApp, "OPEN_ALL_MAX", 5)  # 12 scenarios = "big"
+    app = make_app(root, tmp_path, fake_twister)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await wait_for(lambda: f"d:{root / 'group0'}" in app.node_index)
+        assert "s:g0.t0" not in app.node_index  # group folders start closed
+        assert "4 scenarios" not in str(app.query_one("#statusbar").render())
+        group0 = app.node_index[f"d:{root / 'group0'}"]
+        app.tree.move_cursor(group0)
+        await pilot.press("l")
+        await wait_for(lambda: f"d:{root / 'group0' / 't0'}" in app.node_index)
+        app.node_index[f"d:{root / 'group0' / 't0'}"].expand()
+        await wait_for(lambda: "s:g0.t0" in app.node_index)
+
+        # Stays open across a rebuild; a filter opens everything it matches.
+        await app.rediscover()
+        assert "s:g0.t0" in app.node_index and "s:g1.t0" not in app.node_index
+        await pilot.press("slash", *"g2.t1")
+        await wait_for(lambda: "s:g2.t1" in app.node_index)

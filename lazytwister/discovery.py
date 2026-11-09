@@ -6,6 +6,7 @@ import configparser
 import os
 import re
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 import yaml
@@ -97,8 +98,13 @@ class Discovery:
     scenarios: list[Scenario]
     errors: dict[Path, str]
 
-    def by_name(self) -> dict[str, Scenario]:
+    @cached_property
+    def _by_name(self) -> dict[str, Scenario]:
         return {s.name: s for s in self.scenarios}
+
+    def by_name(self) -> dict[str, Scenario]:
+        """Scenarios by name (cached: a Discovery's scenarios never change)."""
+        return self._by_name
 
     def under(self, folder: Path) -> list[Scenario]:
         """Scenarios whose directory is `folder` or below it."""

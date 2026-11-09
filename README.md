@@ -23,6 +23,9 @@ A lazygit-style terminal UI for running Zephyr **twister** tests in a **west** w
   roots and every `ZTEST*()` case in their sources, shown as a folder → scenario → case tree.
   Folders show `passed/failed/not run` counts in green/red/blue; "not run" covers
   skipped, filtered, build-only, queued and never-run scenarios.
+  Big roots like `zephyr/tests` stay responsive: tests load in the background with a
+  spinner, large trees start with only the roots open, and a folder's contents are only
+  built when you expand it.
 - **Choose the test folders**: the first time you start lazytwister in a directory, a
   folder browser opens so you can pick which folders to look for tests in. Each folder
   shows how many `testcase.yaml` / `sample.yaml` files it holds. The choice is
